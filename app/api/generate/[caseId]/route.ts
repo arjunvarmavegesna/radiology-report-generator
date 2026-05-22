@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
-import { generateReport } from "@/lib/anthropic";
+import { generateReport } from "@/lib/ai";
 import type { CaseDoc } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -96,5 +96,6 @@ export async function POST(
   return NextResponse.json({
     report: result.report,
     usage: result.usage,
+    provider: result.provider,
   });
 }

@@ -387,36 +387,69 @@ When the typist clicks **Generate report**:
    - Reads the user's role from the token claim, falling back to `users/{uid}.role`.
    - Allows `typist` or `radiologist` (so a radiologist can pre-draft if they want).
    - Loads the case from Firestore via the Admin SDK (bypasses security rules; we already enforced auth).
-   - Calls `generateReport(case)` from `lib/anthropic.ts`.
+   - Calls `generateReport(case)` from **`lib/ai.ts`** (the provider dispatcher — see §5.2.4).
 
-3. **`generateReport(c)`** — `lib/anthropic.ts`:
+3. **`generateReport(c)` shared work** (both providers do this via `lib/ai-shared.ts`):
    - Maps the case's `scanType` to the source `.docx` template (`Templates/<file>.docx`) and extracts plain text via `lib/extract-docx-text.ts` (cached in memory).
    - Fetches up to 5 reference reports for that scan type from `lib/reference-corpus.ts` (extracted to plain text, alphabetically sorted — see §5.6).
    - Builds a **two-block user message**:
-     - **Block 1 (static, cacheable):** the system prompt's brief context + the template text + 5 reference examples — typically 8K–20K tokens. Carries `cache_control: { type: "ephemeral" }`. On a second request for the same scan type within 5 minutes, this block reads from cache at ~0.1× cost.
-     - **Block 2 (volatile):** patient details + the radiologist's shorthand notes — typically ~200 tokens. No cache marker; this is per-request.
-   - Calls `client.messages.parse({...})` with:
-     - `model: "claude-sonnet-4-6"`
-     - `max_tokens: 8192`
-     - `temperature: 0.2` (consistency, not creativity)
-     - `thinking: { type: "disabled" }`
-     - `output_config.effort: "low"` (this is a structured-writing task, not reasoning)
-     - `output_config.format: zodOutputFormat(reportJsonSchema)` — forces Claude to return a JSON object matching the Zod schema. No markdown fences, no preamble, no commentary.
-   - Returns the parsed `ReportJSON` + token-usage stats (`input_tokens`, `cache_read_input_tokens`, etc.).
+     - **Block 1 (static):** template plain-text + 5 reference examples — typically 8K–20K tokens. Cacheable on the Claude path.
+     - **Block 2 (volatile):** patient details + the radiologist's shorthand notes — typically ~200 tokens. Per-request.
 
-4. **Server route** then:
+4. **Provider-specific call** — handled by `lib/anthropic.ts` or `lib/gemini.ts`. Both honor the same `ProviderResult` contract; the route is provider-agnostic.
+
+5. **Server route** then:
    - Persists `result.report` to `cases/{caseId}.draftReport`.
    - Claims the case for the typist if not already claimed (`typistId`).
-   - Returns `{ report, usage }` to the client.
+   - Returns `{ report, usage, provider }` to the client.
 
-5. **Client** — sets `report` state to the AI's output. The editor re-renders with the AI-drafted scan title, sections, impression. Any `verifyFlags` populate the amber checklist. Submit-to-reviewer is hard-gated until every flag is checked.
+6. **Client** — sets `report` state to the AI's output. The editor re-renders with the AI-drafted scan title, sections, impression. Any `verifyFlags` populate the amber checklist. Submit-to-reviewer is hard-gated until every flag is checked.
 
-**System prompt** — verbatim from the brief, with the 10 absolute rules (don't invent findings, don't change patient details, match reference phrasing, flag ambiguities, etc.). See `lib/anthropic.ts`.
+#### 5.2.1 System prompt
 
-**Per-case cost** (Sonnet 4.6 pricing):
-- First request on a given scan type writes the cache: ~$0.05.
-- Subsequent requests within the cache TTL (5 minutes) read the cache: ~$0.02–0.03.
-- The route returns `cache_read_input_tokens` in the response so you can verify caching is working.
+Verbatim from Section 6 of the brief, with the 10 absolute rules (don't invent findings, don't change patient details, match reference phrasing, flag ambiguities, etc.). Lives in `lib/ai-shared.ts` — used by both providers, so the AI's behavior contract is identical regardless of which model generates the draft.
+
+#### 5.2.2 Claude path (`lib/anthropic.ts`)
+
+- Model: `claude-sonnet-4-6`.
+- `client.messages.parse({...})` with `output_config.format: zodOutputFormat(reportJsonSchema)` — strict JSON output, validated against the Zod schema by the SDK before it returns.
+- `temperature: 0.2`, `thinking: { type: "disabled" }`, `output_config.effort: "low"` — this is a structured-writing task, not reasoning.
+- **Prompt caching:** the static block carries `cache_control: { type: "ephemeral" }`. The first request on a given scan type writes the cache; subsequent requests within ~5 minutes read it at ~0.1× cost.
+- **Per-case cost**: first request ~$0.05, cache hits ~$0.02–0.03. No free tier.
+
+#### 5.2.3 Gemini path (`lib/gemini.ts`)
+
+- Model: `gemini-2.5-pro`.
+- `ai.models.generateContent({...})` with `config.responseMimeType: "application/json"` and `config.responseSchema` (a typed `Type.OBJECT` mirror of the Zod schema) — strict JSON output.
+- Same `temperature: 0.2` and `maxOutputTokens: 8192`.
+- After the call, the parsed JSON is run through the same Zod schema (`reportJsonSchema.safeParse(...)`) as a defense-in-depth check — catches the rare case where Gemini drops a required field under tight token budgets.
+- **No prompt caching on the free tier** — Gemini's Context Caching API is paid-tier only. The static/volatile block structure still applies (the model sees a consistent shape) — just no cache hits to count.
+- **Per-case cost**: $0 on the free tier (5 RPM / 250K TPM / 25 RPD on Pro, plenty for a small clinic). $0.0001–0.001/case on the paid tier.
+
+#### 5.2.4 Provider dispatcher (`lib/ai.ts`)
+
+A thin `pickProvider()` function reads the `AI_PROVIDER` env var and resolves which path to use:
+
+| `AI_PROVIDER` | What happens |
+|---|---|
+| `claude` or `anthropic` | Claude (errors if `ANTHROPIC_API_KEY` missing) |
+| `gemini` or `google` | Gemini (errors if `GEMINI_API_KEY` missing) |
+| unset | Auto: `ANTHROPIC_API_KEY` set → Claude; else `GEMINI_API_KEY` set → Gemini; else falls back to Claude so the error message is the most actionable |
+
+The route's response includes `provider` so the client (and any future audit log) can record which model generated each draft. To compare providers on the same case, change `AI_PROVIDER` in `.env.local`, restart `npm run dev`, and click **Regenerate**.
+
+#### 5.2.5 Provider tradeoffs
+
+| | Claude Sonnet 4.6 | Gemini 2.5 Pro |
+|---|---|---|
+| **Free tier** | None | Yes — covers a small clinic comfortably |
+| **Quality on this task** | Slightly stronger on "NEVER invent findings" rule-following | Comparable; very slightly looser on strict literal instruction-following |
+| **Prompt caching** | Free, ~90% off on repeats | Paid-tier only |
+| **Strict JSON output** | `messages.parse()` + Zod | `responseSchema` + post-parse Zod |
+| **Per-case cost** | ~$0.03 with caching | $0 on free tier, ~$0.0005 paid |
+| **Rate limits** | High (paid) | Free Pro: 5 RPM / 25 RPD; Free Flash: ~10× higher |
+
+Default to Gemini for cost; switch to Claude if you ever see Gemini fabricate a finding (rule 1 violation) — Claude historically follows instruction-following rules with marginally higher fidelity for clinical work like this.
 
 ---
 
@@ -653,7 +686,10 @@ lib/
   utils.ts                 — cn() (Tailwind class merger)
   extract-docx-text.ts     — server-only plain-text extraction from .docx (cached)
   reference-corpus.ts      — scan_type → folder + filter → top-5 reference reports
-  anthropic.ts             — server-only Claude call (generateReport)
+  ai-shared.ts             — shared system prompt + Zod schema + message builders
+  anthropic.ts             — Claude Sonnet 4.6 backend (messages.parse + prompt cache)
+  gemini.ts                — Gemini 2.5 Pro backend (responseSchema + Zod post-validate)
+  ai.ts                    — provider dispatcher (pickProvider + generateReport)
 
 scripts/
   set-role.ts              — assign role + write users/{uid}
