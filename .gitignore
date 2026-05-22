@@ -43,6 +43,8 @@ next-env.d.ts
 # --- Secrets / credentials ---
 serviceAccountKey.json
 *serviceaccount*.json
+*firebase-adminsdk*.json
+*-adminsdk-*.json
 .env
 .env.local
 
