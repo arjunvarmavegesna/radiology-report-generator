@@ -1,0 +1,55 @@
+rules_version = '2';
+
+// Deploy with: firebase deploy --only firestore:rules
+// Role is read from the custom claim first, then from the users/{uid} doc
+// (so the app works before claims are provisioned).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDocRole() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : null;
+    }
+
+    function hasRole(r) {
+      return isSignedIn() &&
+        (request.auth.token.role == r || userDocRole() == r);
+    }
+
+    // User profiles are provisioned by the admin / set-role script.
+    match /users/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || hasRole('reviewer'));
+      allow write: if false;
+    }
+
+    match /cases/{caseId} {
+      allow create: if hasRole('radiologist')
+        && request.resource.data.radiologistId == request.auth.uid
+        && request.resource.data.status == 'pending_typing';
+
+      allow read: if
+        (hasRole('radiologist') && resource.data.radiologistId == request.auth.uid) ||
+        (hasRole('typist') && (resource.data.status == 'pending_typing' || resource.data.typistId == request.auth.uid)) ||
+        hasRole('reviewer');
+
+      allow update: if
+        (hasRole('typist') && (resource.data.status == 'pending_typing' || resource.data.typistId == request.auth.uid)) ||
+        hasRole('reviewer');
+
+      allow delete: if false;
+
+      // Audit log lives under each case; append-only.
+      match /auditLog/{logId} {
+        allow read: if hasRole('radiologist') || hasRole('typist') || hasRole('reviewer');
+        allow create: if isSignedIn();
+        allow update, delete: if false;
+      }
+    }
+  }
+}
