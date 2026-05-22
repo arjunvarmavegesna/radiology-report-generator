@@ -419,12 +419,12 @@ Verbatim from Section 6 of the brief, with the 10 absolute rules (don't invent f
 
 #### 5.2.3 Gemini path (`lib/gemini.ts`)
 
-- Model: `gemini-2.5-pro`.
+- **Default model: `gemini-2.5-flash`.** Override via `GEMINI_MODEL` env var. **Why Flash and not Pro?** Google's free-tier quotas for `gemini-2.5-pro` have been progressively tightened; on most new AI-Studio-only projects, Pro returns 429 with `limit: 0` — the free tier is effectively unavailable for Pro. Flash is on the free tier with 10 RPM / 250 RPD, well beyond a small clinic's volume. For this task (structured writing from a fixed template + reference examples) Flash and Pro produce comparable output — Pro's advantage is long reasoning chains, which we explicitly aren't asking for. If you enable billing on the GCP project, set `GEMINI_MODEL=gemini-2.5-pro` to use Pro.
 - `ai.models.generateContent({...})` with `config.responseMimeType: "application/json"` and `config.responseSchema` (a typed `Type.OBJECT` mirror of the Zod schema) — strict JSON output.
 - Same `temperature: 0.2` and `maxOutputTokens: 8192`.
 - After the call, the parsed JSON is run through the same Zod schema (`reportJsonSchema.safeParse(...)`) as a defense-in-depth check — catches the rare case where Gemini drops a required field under tight token budgets.
 - **No prompt caching on the free tier** — Gemini's Context Caching API is paid-tier only. The static/volatile block structure still applies (the model sees a consistent shape) — just no cache hits to count.
-- **Per-case cost**: $0 on the free tier (5 RPM / 250K TPM / 25 RPD on Pro, plenty for a small clinic). $0.0001–0.001/case on the paid tier.
+- **Per-case cost**: $0 on the free tier with Flash. With Pro on the paid tier, ~$0.0005–0.001/case.
 
 #### 5.2.4 Provider dispatcher (`lib/ai.ts`)
 

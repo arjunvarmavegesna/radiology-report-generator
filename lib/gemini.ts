@@ -100,12 +100,19 @@ export async function generateReport(c: CaseDoc): Promise<ProviderResult> {
     );
   }
 
+  // Default to gemini-2.5-flash: generous free tier (10 RPM, 250 RPD on most
+  // accounts) and strong enough for the brief's structured-writing task.
+  // gemini-2.5-pro is also supported but requires billing enabled on the GCP
+  // project — without it Pro returns a 429 with limit: 0. Override via the
+  // GEMINI_MODEL env var if you've enabled billing and want Pro.
+  const model = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+
   const staticBlock = buildStaticBlock(c);
   const volatileBlock = buildVolatileBlock(c);
 
   const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-pro",
+    model,
     contents: [
       {
         role: "user",
