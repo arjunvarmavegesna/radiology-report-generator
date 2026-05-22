@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
-import { approveCase, getCase, saveReviewerDraft } from "@/lib/cases";
+import { getCase, saveReviewerDraft } from "@/lib/cases";
 import { SCAN_TYPES, scanTypeLabel } from "@/lib/scan-types";
 import { STATUS_META, formatTimestamp } from "@/lib/format";
 import type { CaseDoc, ReportJSON } from "@/lib/types";
@@ -76,8 +76,8 @@ export default function ReviewerCasePage() {
     }
   }
 
-  async function handleApprove() {
-    if (!user || !report) return;
+  async function handleApproveAndExport() {
+    if (!user || !report || !c) return;
     const cleaned = cleanReport(report);
     if (!cleaned.scanTitle.trim()) {
       toast.error("Scan title is required.");
@@ -91,13 +91,33 @@ export default function ReviewerCasePage() {
       toast.error("Add at least one impression line.");
       return;
     }
+
     setBusy("approve");
     try {
-      await approveCase(id, cleaned, user.uid);
-      toast.success("Approved. (DOCX export is the next milestone.)");
+      const token = await user.getIdToken();
+      const resp = await fetch(`/api/export/${id}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ report: cleaned }),
+      });
+      const data = (await resp.json()) as {
+        downloadUrl?: string;
+        error?: string;
+      };
+      if (!resp.ok || !data.downloadUrl) {
+        throw new Error(data.error || `Export failed (${resp.status})`);
+      }
+      toast.success("Approved. Downloading…");
+      // Open the signed URL in a new tab so the browser triggers the download.
+      window.open(data.downloadUrl, "_blank", "noopener,noreferrer");
       router.push("/reviewer/queue");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to approve.");
+      toast.error(
+        err instanceof Error ? err.message : "Failed to approve & export.",
+      );
     } finally {
       setBusy(null);
     }
@@ -169,7 +189,8 @@ export default function ReviewerCasePage() {
               <CardHeader>
                 <CardTitle>Final Review</CardTitle>
                 <CardDescription>
-                  Edit if needed, then approve. DOCX export is wired up next.
+                  Edit if needed, then approve. Approval generates the final
+                  .docx and downloads it automatically.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -189,16 +210,25 @@ export default function ReviewerCasePage() {
                       {busy === "save" ? "Saving…" : "Save edits"}
                     </Button>
                     <Button
-                      onClick={handleApprove}
+                      onClick={handleApproveAndExport}
                       disabled={busy !== null}
                     >
-                      {busy === "approve" ? "Approving…" : "Approve & close"}
+                      {busy === "approve"
+                        ? "Approving & exporting…"
+                        : "Approve & export"}
                     </Button>
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
                     Case is {STATUS_META[c.status].label.toLowerCase()};
                     editing is disabled.
+                    {c.finalDocxPath && (
+                      <>
+                        {" "}
+                        Final DOCX path:{" "}
+                        <code className="text-xs">{c.finalDocxPath}</code>.
+                      </>
+                    )}
                   </p>
                 )}
               </CardContent>
