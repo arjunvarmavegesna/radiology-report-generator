@@ -5,15 +5,20 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminDb, adminStorage } from "@/lib/firebase-admin";
+import { SCAN_TYPES } from "@/lib/scan-types";
 import type { ReportJSON } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** Scan type → path (relative to project root) of the tagged docx template. */
-const TAGGED_TEMPLATES: Record<string, string> = {
-  thyroid_neck: "data/templates-tagged/thyroid_neck.tagged.docx",
-};
+/**
+ * Scan type → path (relative to project root) of the tagged docx template.
+ * Derived from SCAN_TYPES so adding a new scan type only requires adding the
+ * value there + dropping the tagged file at the expected path.
+ */
+const TAGGED_TEMPLATES: Record<string, string> = Object.fromEntries(
+  SCAN_TYPES.map((s) => [s.value, `data/templates-tagged/${s.value}.tagged.docx`]),
+);
 
 function sanitize(s: string): string {
   return (s || "report").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
