@@ -5,9 +5,9 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
-import { getCase, saveTypistDraft, submitToReviewer } from "@/lib/cases";
+import { approveCase, getCase, saveReviewerDraft } from "@/lib/cases";
 import { SCAN_TYPES, scanTypeLabel } from "@/lib/scan-types";
-import { STATUS_META } from "@/lib/format";
+import { STATUS_META, formatTimestamp } from "@/lib/format";
 import type { CaseDoc, ReportJSON } from "@/lib/types";
 import { ReportEditor } from "@/components/report-editor";
 import {
@@ -24,24 +24,6 @@ function isObstetric(scanType: string): boolean {
   return SCAN_TYPES.find((s) => s.value === scanType)?.isObstetric ?? false;
 }
 
-function emptyReport(c: CaseDoc): ReportJSON {
-  return {
-    patientDetails: {
-      name: c.patientName,
-      age: c.age,
-      gender: c.gender,
-      mrNumber: c.mrNumber,
-      date: c.dateOfExam,
-      refDoctor: c.refDoctor,
-    },
-    scanTitle: scanTypeLabel(c.scanType).toUpperCase(),
-    sections: [{ label: "", body: "" }],
-    impression: [""],
-    verifyFlags: [],
-    complianceText: isObstetric(c.scanType) ? "" : null,
-  };
-}
-
 function cleanReport(r: ReportJSON): ReportJSON {
   return {
     ...r,
@@ -52,7 +34,7 @@ function cleanReport(r: ReportJSON): ReportJSON {
   };
 }
 
-export default function TypistCasePage() {
+export default function ReviewerCasePage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const router = useRouter();
@@ -61,7 +43,7 @@ export default function TypistCasePage() {
   const [c, setC] = useState<CaseDoc | null>(null);
   const [report, setReport] = useState<ReportJSON | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<null | "save" | "submit">(null);
+  const [busy, setBusy] = useState<null | "save" | "approve">(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -69,7 +51,7 @@ export default function TypistCasePage() {
     setC(data);
     setReport(
       data
-        ? data.editedReport ?? data.draftReport ?? emptyReport(data)
+        ? data.finalReport ?? data.editedReport ?? data.draftReport ?? null
         : null,
     );
     setLoading(false);
@@ -79,24 +61,22 @@ export default function TypistCasePage() {
     load();
   }, [load]);
 
-  const locked = !c || c.status !== "pending_typing";
+  const canEdit = !!c && c.status === "pending_review";
 
   async function handleSave() {
     if (!user || !report) return;
     setBusy("save");
     try {
-      await saveTypistDraft(id, cleanReport(report), user.uid);
-      toast.success("Draft saved.");
+      await saveReviewerDraft(id, cleanReport(report), user.uid);
+      toast.success("Edits saved.");
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to save draft.",
-      );
+      toast.error(err instanceof Error ? err.message : "Failed to save.");
     } finally {
       setBusy(null);
     }
   }
 
-  async function handleSubmit() {
+  async function handleApprove() {
     if (!user || !report) return;
     const cleaned = cleanReport(report);
     if (!cleaned.scanTitle.trim()) {
@@ -104,22 +84,20 @@ export default function TypistCasePage() {
       return;
     }
     if (cleaned.sections.length === 0) {
-      toast.error("Add at least one section with findings.");
+      toast.error("Add at least one section.");
       return;
     }
     if (cleaned.impression.length === 0) {
       toast.error("Add at least one impression line.");
       return;
     }
-    setBusy("submit");
+    setBusy("approve");
     try {
-      await submitToReviewer(id, cleaned, user.uid);
-      toast.success("Submitted to reviewer.");
-      router.push("/typist/queue");
+      await approveCase(id, cleaned, user.uid);
+      toast.success("Approved. (DOCX export is the next milestone.)");
+      router.push("/reviewer/queue");
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to submit.",
-      );
+      toast.error(err instanceof Error ? err.message : "Failed to approve.");
     } finally {
       setBusy(null);
     }
@@ -128,13 +106,17 @@ export default function TypistCasePage() {
   return (
     <div className="space-y-4">
       <Button asChild variant="ghost" size="sm">
-        <Link href="/typist/queue">← Back to queue</Link>
+        <Link href="/reviewer/queue">← Back to review queue</Link>
       </Button>
 
       {loading ? (
         <p className="text-muted-foreground">Loading…</p>
-      ) : !c || !report ? (
+      ) : !c ? (
         <p className="text-muted-foreground">Case not found.</p>
+      ) : !report ? (
+        <p className="text-muted-foreground">
+          No report on this case yet — the typist hasn&apos;t drafted it.
+        </p>
       ) : (
         <div className="grid md:grid-cols-3 gap-6">
           <div className="md:col-span-1 space-y-6">
@@ -158,6 +140,7 @@ export default function TypistCasePage() {
                       ["Date of Exam", c.dateOfExam],
                       ["Ref. Doctor", c.refDoctor || "—"],
                       ["Scan Type", scanTypeLabel(c.scanType)],
+                      ["Submitted", formatTimestamp(c.typistSubmittedAt)],
                     ] as [string, string][]
                   ).map(([label, value]) => (
                     <div key={label} className="flex flex-col">
@@ -184,39 +167,38 @@ export default function TypistCasePage() {
           <div className="md:col-span-2">
             <Card>
               <CardHeader>
-                <CardTitle>Report</CardTitle>
+                <CardTitle>Final Review</CardTitle>
                 <CardDescription>
-                  Type the formal report from the radiologist&apos;s notes. AI
-                  drafting + Tiptap arrive in Phase 2.
+                  Edit if needed, then approve. DOCX export is wired up next.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
                 <ReportEditor
                   report={report}
                   onChange={setReport}
-                  disabled={locked}
+                  disabled={!canEdit}
                   showCompliance={isObstetric(c.scanType)}
                 />
-                {!locked ? (
+                {canEdit ? (
                   <div className="flex justify-end gap-2">
                     <Button
                       variant="outline"
                       onClick={handleSave}
                       disabled={busy !== null}
                     >
-                      {busy === "save" ? "Saving…" : "Save draft"}
+                      {busy === "save" ? "Saving…" : "Save edits"}
                     </Button>
-                    <Button onClick={handleSubmit} disabled={busy !== null}>
-                      {busy === "submit"
-                        ? "Submitting…"
-                        : "Submit to reviewer"}
+                    <Button
+                      onClick={handleApprove}
+                      disabled={busy !== null}
+                    >
+                      {busy === "approve" ? "Approving…" : "Approve & close"}
                     </Button>
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    This case is no longer pending typing — it&apos;s{" "}
-                    {STATUS_META[c.status].label.toLowerCase()}. Editing is
-                    disabled.
+                    Case is {STATUS_META[c.status].label.toLowerCase()};
+                    editing is disabled.
                   </p>
                 )}
               </CardContent>

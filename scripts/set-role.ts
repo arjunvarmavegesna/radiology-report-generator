@@ -5,19 +5,40 @@
  * Usage:
  *   npx tsx scripts/set-role.ts <email> <radiologist|typist|reviewer> [full name]
  *
- * Auth: place a Firebase service account JSON at ./serviceAccountKey.json,
- * or set GOOGLE_APPLICATION_CREDENTIALS to its path.
+ * Auth (any one of):
+ *   - a Firebase service account JSON saved as ./serviceAccountKey.json, or
+ *   - any *firebase-adminsdk*.json dropped in the project root (auto-detected), or
+ *   - GOOGLE_APPLICATION_CREDENTIALS pointing at a key file.
  *
  * The user must sign out and back in for a new claim to take effect.
  */
 import { initializeApp, cert, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const VALID_ROLES = ["radiologist", "typist", "reviewer"] as const;
 type Role = (typeof VALID_ROLES)[number];
+
+/** Locate a service account key: explicit name first, then any admin-sdk json. */
+function findKeyFile(): string | null {
+  const explicit = resolve(process.cwd(), "serviceAccountKey.json");
+  if (existsSync(explicit)) return explicit;
+
+  const candidates = readdirSync(process.cwd()).filter(
+    (f) => f.toLowerCase().endsWith(".json") && /firebase-adminsdk/i.test(f),
+  );
+  if (candidates.length === 1) return resolve(process.cwd(), candidates[0]);
+  if (candidates.length > 1) {
+    console.error(
+      `Found multiple admin-SDK keys (${candidates.join(", ")}). ` +
+        "Rename the correct one to serviceAccountKey.json and re-run.",
+    );
+    process.exit(1);
+  }
+  return null;
+}
 
 async function main() {
   const [email, role, ...nameParts] = process.argv.slice(2);
@@ -35,11 +56,20 @@ async function main() {
   }
 
   if (!getApps().length) {
-    const keyPath = resolve(process.cwd(), "serviceAccountKey.json");
-    if (existsSync(keyPath)) {
+    const keyPath = findKeyFile();
+    if (keyPath) {
       initializeApp({ credential: cert(JSON.parse(readFileSync(keyPath, "utf8"))) });
-    } else {
+      console.log(`Using service account: ${keyPath}`);
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
       initializeApp({ credential: applicationDefault() });
+    } else {
+      console.error(
+        "\nNo Firebase credentials found.\n" +
+          "Firebase Console -> Project settings (gear) -> Service accounts ->\n" +
+          "  Generate new private key, save it as serviceAccountKey.json in the\n" +
+          "  project root, then re-run this command.\n",
+      );
+      process.exit(1);
     }
   }
 

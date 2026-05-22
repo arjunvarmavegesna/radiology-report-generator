@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { getReviewQueue } from "@/lib/cases";
 import { scanTypeLabel } from "@/lib/scan-types";
 import { formatTimestamp } from "@/lib/format";
@@ -23,6 +24,7 @@ import {
 } from "@/components/ui/table";
 
 export default function ReviewQueuePage() {
+  const router = useRouter();
   const [cases, setCases] = useState<CaseDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +51,9 @@ export default function ReviewQueuePage() {
       <CardHeader className="flex flex-row items-start justify-between gap-4">
         <div>
           <CardTitle>Review Queue</CardTitle>
-          <CardDescription>Cases awaiting final review, oldest first.</CardDescription>
+          <CardDescription>
+            Cases awaiting final review, oldest first.
+          </CardDescription>
         </div>
         <Button variant="outline" size="sm" onClick={load} disabled={loading}>
           Refresh
@@ -63,39 +67,48 @@ export default function ReviewQueuePage() {
               <TableHead>MR No.</TableHead>
               <TableHead>Scan Type</TableHead>
               <TableHead>Submitted</TableHead>
-              <TableHead />
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground">
+                <TableCell
+                  colSpan={4}
+                  className="text-center text-muted-foreground"
+                >
                   Loading…
                 </TableCell>
               </TableRow>
             ) : error ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground">
+                <TableCell
+                  colSpan={4}
+                  className="text-center text-muted-foreground"
+                >
                   {error}
                 </TableCell>
               </TableRow>
             ) : cases.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground">
+                <TableCell
+                  colSpan={4}
+                  className="text-center text-muted-foreground"
+                >
                   No cases awaiting review.
                 </TableCell>
               </TableRow>
             ) : (
               cases.map((c) => (
-                <TableRow key={c.id}>
+                <TableRow
+                  key={c.id}
+                  className="cursor-pointer hover:bg-muted/50"
+                  onClick={() => router.push(`/reviewer/case/${c.id}`)}
+                >
                   <TableCell className="font-bold">{c.patientName}</TableCell>
                   <TableCell>{c.mrNumber}</TableCell>
                   <TableCell>{scanTypeLabel(c.scanType)}</TableCell>
-                  <TableCell>{formatTimestamp(c.typistSubmittedAt)}</TableCell>
                   <TableCell>
-                    <Button size="sm" variant="outline" disabled>
-                      Open (Phase 2)
-                    </Button>
+                    {formatTimestamp(c.typistSubmittedAt)}
                   </TableCell>
                 </TableRow>
               ))

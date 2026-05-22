@@ -6,11 +6,12 @@ import {
   getDocs,
   query,
   serverTimestamp,
+  updateDoc,
   where,
   type Timestamp,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import type { CaseDoc, NewCaseInput } from "./types";
+import type { CaseDoc, NewCaseInput, ReportJSON } from "./types";
 
 const CASES = "cases";
 
@@ -87,10 +88,69 @@ export async function getReviewQueue(): Promise<CaseDoc[]> {
   );
   return snap.docs
     .map((d) => mapCase(d.id, d.data()))
-    .sort((a, b) => tsMillis(a.typistSubmittedAt) - tsMillis(b.typistSubmittedAt));
+    .sort(
+      (a, b) =>
+        tsMillis(a.typistSubmittedAt) - tsMillis(b.typistSubmittedAt),
+    );
 }
 
 export async function getCase(id: string): Promise<CaseDoc | null> {
   const snap = await getDoc(doc(db, CASES, id));
   return snap.exists() ? mapCase(snap.id, snap.data()) : null;
+}
+
+/** Typist: save in-progress edits without changing status. */
+export async function saveTypistDraft(
+  caseId: string,
+  report: ReportJSON,
+  typistId: string,
+): Promise<void> {
+  await updateDoc(doc(db, CASES, caseId), {
+    editedReport: report,
+    typistId,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Typist: hand off to the reviewer. */
+export async function submitToReviewer(
+  caseId: string,
+  report: ReportJSON,
+  typistId: string,
+): Promise<void> {
+  await updateDoc(doc(db, CASES, caseId), {
+    editedReport: report,
+    typistId,
+    status: "pending_review",
+    typistSubmittedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Reviewer: save in-progress edits without changing status. */
+export async function saveReviewerDraft(
+  caseId: string,
+  report: ReportJSON,
+  reviewerId: string,
+): Promise<void> {
+  await updateDoc(doc(db, CASES, caseId), {
+    finalReport: report,
+    reviewerId,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Reviewer: final approval. DOCX export will follow in the next milestone. */
+export async function approveCase(
+  caseId: string,
+  report: ReportJSON,
+  reviewerId: string,
+): Promise<void> {
+  await updateDoc(doc(db, CASES, caseId), {
+    finalReport: report,
+    reviewerId,
+    status: "approved",
+    reviewerApprovedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
 }
