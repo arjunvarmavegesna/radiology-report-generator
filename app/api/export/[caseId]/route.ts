@@ -155,7 +155,8 @@ export async function POST(
 
   // --- Upload to Firebase Storage ---
   const safe = sanitize(report.patientDetails.name);
-  const storagePath = `final/${caseId}/${safe}_${scanType}.docx`;
+  const filename = `${safe}_${scanType}.docx`;
+  const storagePath = `final/${caseId}/${filename}`;
   const file = adminStorage().bucket().file(storagePath);
   try {
     await file.save(outBuf, {
@@ -171,10 +172,13 @@ export async function POST(
     );
   }
 
-  // Signed read URL, valid 7 days.
+  // Signed read URL, valid 7 days. responseDisposition forces a download with a
+  // sensible filename, regardless of how the client navigates to it — so popup
+  // blockers can't silently swallow the open.
   const [downloadUrl] = await file.getSignedUrl({
     action: "read",
     expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    responseDisposition: `attachment; filename="${filename}"`,
   });
 
   // --- Mark case approved + persist final report ---

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
@@ -37,13 +37,13 @@ function cleanReport(r: ReportJSON): ReportJSON {
 export default function ReviewerCasePage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
-  const router = useRouter();
   const { user } = useAuth();
 
   const [c, setC] = useState<CaseDoc | null>(null);
   const [report, setReport] = useState<ReportJSON | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<null | "save" | "approve">(null);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,6 +62,7 @@ export default function ReviewerCasePage() {
   }, [load]);
 
   const canEdit = !!c && c.status === "pending_review";
+  const isApproved = !!c && c.status === "approved";
 
   async function handleSave() {
     if (!user || !report) return;
@@ -76,8 +77,8 @@ export default function ReviewerCasePage() {
     }
   }
 
-  async function handleApproveAndExport() {
-    if (!user || !report || !c) return;
+  async function runExport() {
+    if (!user || !report) return;
     const cleaned = cleanReport(report);
     if (!cleaned.scanTitle.trim()) {
       toast.error("Scan title is required.");
@@ -110,10 +111,26 @@ export default function ReviewerCasePage() {
       if (!resp.ok || !data.downloadUrl) {
         throw new Error(data.error || `Export failed (${resp.status})`);
       }
-      toast.success("Approved. Downloading…");
-      // Open the signed URL in a new tab so the browser triggers the download.
-      window.open(data.downloadUrl, "_blank", "noopener,noreferrer");
-      router.push("/reviewer/queue");
+
+      // Persist the URL so the user can re-download if the auto-trigger gets
+      // blocked. The button below stays visible until the page is left.
+      setDownloadUrl(data.downloadUrl);
+      toast.success(
+        isApproved ? "Re-exported." : "Approved. Download starting…",
+      );
+
+      // Best-effort auto-download via a synthetic anchor click. With
+      // responseDisposition=attachment on the signed URL, the browser treats
+      // this as a download — most popup blockers leave it alone.
+      const a = document.createElement("a");
+      a.href = data.downloadUrl;
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      // Refresh case state so the status badge + locked-form UI update.
+      await load();
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Failed to approve & export.",
@@ -189,17 +206,41 @@ export default function ReviewerCasePage() {
               <CardHeader>
                 <CardTitle>Final Review</CardTitle>
                 <CardDescription>
-                  Edit if needed, then approve. Approval generates the final
-                  .docx and downloads it automatically.
+                  {canEdit
+                    ? "Edit if needed, then approve. Approval generates the final .docx and downloads it."
+                    : isApproved
+                      ? "This case is approved. You can re-export the .docx at any time."
+                      : `Case is ${STATUS_META[c.status].label.toLowerCase()}.`}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
+                {downloadUrl && (
+                  <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm">
+                    <p className="font-medium text-green-900">
+                      ✓ DOCX ready.
+                    </p>
+                    <p className="mt-1 text-green-800">
+                      The download should have started automatically. If your
+                      browser blocked it,{" "}
+                      <a
+                        href={downloadUrl}
+                        rel="noopener noreferrer"
+                        className="font-medium underline"
+                      >
+                        click here to download
+                      </a>
+                      . Link is valid for 7 days.
+                    </p>
+                  </div>
+                )}
+
                 <ReportEditor
                   report={report}
                   onChange={setReport}
                   disabled={!canEdit}
                   showCompliance={isObstetric(c.scanType)}
                 />
+
                 {canEdit ? (
                   <div className="flex justify-end gap-2">
                     <Button
@@ -209,26 +250,30 @@ export default function ReviewerCasePage() {
                     >
                       {busy === "save" ? "Saving…" : "Save edits"}
                     </Button>
-                    <Button
-                      onClick={handleApproveAndExport}
-                      disabled={busy !== null}
-                    >
+                    <Button onClick={runExport} disabled={busy !== null}>
                       {busy === "approve"
                         ? "Approving & exporting…"
                         : "Approve & export"}
                     </Button>
                   </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    Case is {STATUS_META[c.status].label.toLowerCase()};
-                    editing is disabled.
-                    {c.finalDocxPath && (
-                      <>
-                        {" "}
-                        Final DOCX path:{" "}
-                        <code className="text-xs">{c.finalDocxPath}</code>.
-                      </>
-                    )}
+                ) : isApproved ? (
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={runExport}
+                      disabled={busy !== null}
+                    >
+                      {busy === "approve"
+                        ? "Re-exporting…"
+                        : "Re-export & download"}
+                    </Button>
+                  </div>
+                ) : null}
+
+                {!canEdit && c.finalDocxPath && (
+                  <p className="text-xs text-muted-foreground">
+                    Storage path:{" "}
+                    <code className="text-xs">{c.finalDocxPath}</code>
                   </p>
                 )}
               </CardContent>
