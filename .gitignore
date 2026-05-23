@@ -53,3 +53,5 @@ serviceAccountKey.json
 
 # --- Local tooling config ---
 .claude/settings.local.json
+firebase-debug.log
+*-debug.log

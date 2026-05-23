@@ -160,11 +160,33 @@ export async function POST(
   // Signed read URL, valid 7 days. responseDisposition forces a download with a
   // sensible filename, regardless of how the client navigates to it — so popup
   // blockers can't silently swallow the open.
-  const [downloadUrl] = await file.getSignedUrl({
-    action: "read",
-    expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
-    responseDisposition: `attachment; filename="${filename}"`,
-  });
+  //
+  // NOTE: `getSignedUrl` requires the running service account to either ship
+  // with a `private_key` field (local dev with serviceAccountKey.json) OR
+  // have `roles/iam.serviceAccountTokenCreator` on itself (Cloud Run / App
+  // Hosting via the IAM signBlob API). On App Hosting, grant the role with:
+  //   gcloud iam service-accounts add-iam-policy-binding <sa-email> \
+  //     --member="serviceAccount:<sa-email>" \
+  //     --role="roles/iam.serviceAccountTokenCreator"
+  let downloadUrl: string;
+  try {
+    [downloadUrl] = await file.getSignedUrl({
+      action: "read",
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      responseDisposition: `attachment; filename="${filename}"`,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "signed URL failed";
+    return NextResponse.json(
+      {
+        error:
+          `Could not generate a signed download URL: ${msg}. ` +
+          "If this is App Hosting, the service account needs " +
+          "roles/iam.serviceAccountTokenCreator on itself.",
+      },
+      { status: 500 },
+    );
+  }
 
   // --- Mark case approved + persist final report ---
   await caseRef.update({
