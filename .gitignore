@@ -37,8 +37,11 @@ next-env.d.ts
 
 # --- Patient data / PHI: NEVER commit ---
 /Approved*/
-/Templates/
 /data/reference/
+
+# Word lockfiles inside the (committed) Templates folder — created when a
+# template is open in Word. Never useful in git.
+Templates/~$*
 
 # --- Secrets / credentials ---
 serviceAccountKey.json

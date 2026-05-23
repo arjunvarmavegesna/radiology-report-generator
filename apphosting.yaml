@@ -33,22 +33,9 @@ env:
     value: "1:971174520916:web:b541a583cc08cc907765c1"
     availability: [BUILD, RUNTIME]
 
-  # --- AI provider selector (optional; dispatcher auto-picks from whichever
-  #     key is set if unset). Values: "claude" | "gemini". ---
-  # - variable: AI_PROVIDER
-  #   value: gemini
-  #   availability: [RUNTIME]
-
-  # --- AI provider secrets. One of these must be set in production. Store in
-  #     Cloud Secret Manager first, then uncomment the matching block. ---
-  # Anthropic Claude (paid; no free tier):
-  #   firebase apphosting:secrets:set ANTHROPIC_API_KEY
-  # - variable: ANTHROPIC_API_KEY
-  #   secret: ANTHROPIC_API_KEY
-  #   availability: [RUNTIME]
-  #
-  # Google Gemini (free tier covers small clinics):
-  #   firebase apphosting:secrets:set GEMINI_API_KEY
-  # - variable: GEMINI_API_KEY
-  #   secret: GEMINI_API_KEY
-  #   availability: [RUNTIME]
+  # --- Claude Opus 4.7 — single AI provider ---
+  # Set the secret once with:  firebase apphosting:secrets:set ANTHROPIC_API_KEY
+  # then grant access:          firebase apphosting:secrets:grantaccess ANTHROPIC_API_KEY --backend <backend-id>
+  - variable: ANTHROPIC_API_KEY
+    secret: ANTHROPIC_API_KEY
+    availability: [RUNTIME]
