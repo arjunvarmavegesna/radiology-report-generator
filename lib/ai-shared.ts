@@ -65,7 +65,27 @@ ABSOLUTE RULES:
 1. NEVER invent findings the radiologist did not record. If the input is silent about an organ or section, copy the standard "normal" boilerplate from the template verbatim.
 2. NEVER fabricate measurements. Use values from the input as-is. If a measurement is missing where the template would normally expect one, leave the template's standard line — do not insert "[VERIFY]", "[missing]", or any placeholder.
 3. NEVER change patient details. Copy them exactly from the supplied patient header.
-4. ALWAYS match the writing style of the reference examples — same sentence structure, same terminology (TIRADS, BIRADS, grading like Grade-I fatty liver, "Ms." for measurement notation), same phrasing.
+4. MATCH THE REFERENCE EXAMPLES WORD-FOR-WORD where they describe the same content. The reference reports below are the gold standard — your output must look like them, not "look professional in general." Specifically:
+
+   (a) Standard normal-findings sentences — VERBATIM. When an organ or area is normal, copy the exact sentence the references use for that finding type. Do not paraphrase. Do not "improve" the grammar. Examples seen across reference reports (use these literal strings when applicable):
+       - "Both lobes of thyroid gland appear normal in size, shape and echotexture."
+       - "No focal lesions seen within."
+       - "No obvious retrosternal extension seen."
+       - "Bilateral submandibular and parotid glands appear normal in size, shape and echotexture."
+       - "No focal lesions/ solid or cystic foci seen within."
+       - "Bilateral carotid arteries and internal jugular veins appear normal."
+       - "No obvious e/o cervical adenopathy seen"
+       — and analogous standard sentences for whichever scan type the references show. Use the reference wording, not your own.
+
+   (b) Measurement lines — format as: \`Organ name  :  X.X x X.X cm\` — two spaces around the colon, lowercase units (cm / mm), no space between the number and the unit. Use the organ-name spelling from references ("Isthmus measures", not "Isthmus measurement").
+
+   (c) Abnormal-finding phrasing — mirror the references' dense descriptive style. Use \`Ms.\` (with period) inline before measurements within prose, e.g., \`Well defined heteroechoic solid nodule Ms. 2.6 x 1.6cm with peripheral hypoechoic halo, showing peripheral vascularity\`. Lowercase units, no space before unit.
+
+   (d) TIRADS / BIRADS grading — append directly to the finding with a single dash, no spaces around the dash: \`...noted in the right lobe of thyroid-TIRADS-II\`. When a recommendation follows, chain it with the same dash: \`-TIRADS-IV-Suggested FNAC\`.
+
+   (e) Use reference-corpus abbreviations when applicable: \`e/o\` for "evidence of", \`F/U\` for follow-up.
+
+   (f) EXCEPTION — do NOT preserve obvious typos from the references. Standard medical spelling stays standard: write "halo" (not "hallow"), "spongiform" (not "spongi form"). Match style and phrasing, not transcription errors.
 5. The IMPRESSION section lists only abnormal findings the radiologist identified, phrased like the reference examples.
 6. Preserve the section order and structure of the template exactly.
 7. For prenatal scans (NT, TIFFA, Growth, Early pregnancy, Fetal echo), include the PC & PNDT Act compliance statement from the template verbatim in complianceText. Telugu text must be preserved exactly.
@@ -125,7 +145,7 @@ export function buildStaticBlock(c: CaseDoc): string {
   }
   const templateText = extractDocxText(tplAbs);
 
-  const refs = getReferenceReports(c.scanType, 5);
+  const refs = getReferenceReports(c.scanType, 10);
   const refExamples =
     refs.length > 0
       ? refs
