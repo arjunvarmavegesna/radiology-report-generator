@@ -3,34 +3,23 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { roleHome } from "@/lib/roles";
-import type { Role } from "@/lib/types";
 
 /**
- * Client-side route guard used by each role's layout. Redirects unauthenticated
- * users to /login and wrong-role users to their own home.
+ * Client-side guard for the workspace. Redirects unauthenticated users to
+ * /login. Role is no longer checked — this is a single-role app, every
+ * signed-in user sees the same Capture → Review → Queue workspace.
  *
- * NOTE: this is UX-level protection. Real authorization is enforced by the
- * Firestore security rules in firestore.rules.
+ * UX-level protection only. Real authorization is enforced by firestore.rules
+ * and the API routes (verifyIdToken).
  */
-export function RoleGuard({
-  role,
-  children,
-}: {
-  role: Role;
-  children: React.ReactNode;
-}) {
-  const { user, role: userRole, loading } = useAuth();
+export function AuthGuard({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
     if (loading) return;
-    if (!user) {
-      router.replace("/login");
-    } else if (userRole !== role) {
-      router.replace(roleHome(userRole));
-    }
-  }, [loading, user, userRole, role, router]);
+    if (!user) router.replace("/login");
+  }, [loading, user, router]);
 
   if (loading) {
     return (
@@ -39,7 +28,7 @@ export function RoleGuard({
       </div>
     );
   }
-  if (!user || userRole !== role) {
+  if (!user) {
     return (
       <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
         Redirecting…
@@ -48,3 +37,8 @@ export function RoleGuard({
   }
   return <>{children}</>;
 }
+
+// Back-compat re-export — older route files import `RoleGuard`. They're being
+// deleted in this change, but keeping the alias avoids a compile error if any
+// were missed.
+export const RoleGuard = AuthGuard;

@@ -5,9 +5,10 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
-import { getCase, saveTypistDraft, submitToReviewer } from "@/lib/cases";
+import { getCase, saveReviewerDraft } from "@/lib/cases";
 import { SCAN_TYPES, scanTypeLabel } from "@/lib/scan-types";
-import { STATUS_META } from "@/lib/format";
+import { STATUS_META, formatTimestamp } from "@/lib/format";
+import { openInWord } from "@/lib/office-url";
 import type { CaseDoc, ReportJSON } from "@/lib/types";
 import { ReportEditor } from "@/components/report-editor";
 import {
@@ -53,18 +54,18 @@ function cleanReport(r: ReportJSON): ReportJSON {
   };
 }
 
-export default function TypistCasePage() {
-  const params = useParams<{ id: string }>();
-  const id = params.id;
+export default function ReviewDetailPage() {
+  const params = useParams<{ caseId: string }>();
+  const id = params.caseId;
   const router = useRouter();
   const { user } = useAuth();
 
   const [c, setC] = useState<CaseDoc | null>(null);
   const [report, setReport] = useState<ReportJSON | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<null | "save" | "submit" | "generate">(
-    null,
-  );
+  const [busy, setBusy] = useState<
+    null | "save" | "approve" | "generate"
+  >(null);
   const [resolvedFlags, setResolvedFlags] = useState<Set<number>>(new Set());
 
   const load = useCallback(async () => {
@@ -73,12 +74,14 @@ export default function TypistCasePage() {
     setC(data);
     if (data) {
       setReport(
-        data.editedReport ?? data.draftReport ?? emptyReport(data),
+        data.finalReport ??
+          data.editedReport ??
+          data.draftReport ??
+          emptyReport(data),
       );
     } else {
       setReport(null);
     }
-    // Always reset resolved-flags on (re)load — the typist must re-confirm.
     setResolvedFlags(new Set());
     setLoading(false);
   }, [id]);
@@ -87,13 +90,13 @@ export default function TypistCasePage() {
     load();
   }, [load]);
 
-  const locked = !c || c.status !== "pending_typing";
-  const hasAIDraft = !!c?.draftReport;
+  const isApproved = !!c && c.status === "approved";
+  const canEdit = !!c && !isApproved;
   const verifyFlags = report?.verifyFlags ?? [];
   const allFlagsResolved =
     verifyFlags.length === 0 || resolvedFlags.size === verifyFlags.length;
 
-  async function handleGenerate() {
+  async function handleRegenerate() {
     if (!user || !c) return;
     setBusy("generate");
     try {
@@ -107,17 +110,15 @@ export default function TypistCasePage() {
         error?: string;
       };
       if (!resp.ok || !data.report) {
-        throw new Error(
-          data.error || `Generation failed (${resp.status})`,
-        );
+        throw new Error(data.error || `Generation failed (${resp.status})`);
       }
       setReport(data.report);
       setResolvedFlags(new Set());
       const flagCount = data.report.verifyFlags.length;
       toast.success(
         flagCount > 0
-          ? `Draft ready. Resolve ${flagCount} verify flag${flagCount === 1 ? "" : "s"} before submitting.`
-          : "Draft ready.",
+          ? `Draft refreshed. Resolve ${flagCount} verify flag${flagCount === 1 ? "" : "s"} before approving.`
+          : "Draft refreshed.",
       );
     } catch (err) {
       toast.error(
@@ -132,21 +133,20 @@ export default function TypistCasePage() {
     if (!user || !report) return;
     setBusy("save");
     try {
-      await saveTypistDraft(id, cleanReport(report), user.uid);
-      toast.success("Draft saved.");
+      await saveReviewerDraft(id, cleanReport(report), user.uid);
+      toast.success("Edits saved.");
+      await load();
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to save draft.",
-      );
+      toast.error(err instanceof Error ? err.message : "Failed to save.");
     } finally {
       setBusy(null);
     }
   }
 
-  async function handleSubmit() {
+  async function handleApprove() {
     if (!user || !report) return;
     if (!allFlagsResolved) {
-      toast.error("Resolve all verify flags before submitting.");
+      toast.error("Resolve all verify flags before approving.");
       return;
     }
     const cleaned = cleanReport(report);
@@ -155,21 +155,41 @@ export default function TypistCasePage() {
       return;
     }
     if (cleaned.sections.length === 0) {
-      toast.error("Add at least one section with findings.");
+      toast.error("Add at least one section.");
       return;
     }
     if (cleaned.impression.length === 0) {
       toast.error("Add at least one impression line.");
       return;
     }
-    setBusy("submit");
+
+    setBusy("approve");
     try {
-      await submitToReviewer(id, cleaned, user.uid);
-      toast.success("Submitted to reviewer.");
-      router.push("/typist/queue");
+      const token = await user.getIdToken();
+      const resp = await fetch(`/api/export/${id}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ report: cleaned }),
+      });
+      const data = (await resp.json()) as {
+        downloadUrl?: string;
+        error?: string;
+      };
+      if (!resp.ok || !data.downloadUrl) {
+        throw new Error(data.error || `Export failed (${resp.status})`);
+      }
+      // Launch Word directly on the freshly-signed URL. The browser may show
+      // an "Open Microsoft Word?" prompt on first use — clicking Open
+      // launches Word with the report ready to print.
+      openInWord(data.downloadUrl);
+      toast.success("Approved — opening in Word and adding to Print Queue.");
+      router.push("/queue");
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : "Failed to submit.",
+        err instanceof Error ? err.message : "Failed to approve & export.",
       );
     } finally {
       setBusy(null);
@@ -188,7 +208,7 @@ export default function TypistCasePage() {
   return (
     <div className="space-y-4">
       <Button asChild variant="ghost" size="sm">
-        <Link href="/typist/queue">← Back to queue</Link>
+        <Link href="/review">← Back to review list</Link>
       </Button>
 
       {loading ? (
@@ -218,6 +238,7 @@ export default function TypistCasePage() {
                       ["Date of Exam", c.dateOfExam],
                       ["Ref. Doctor", c.refDoctor || "—"],
                       ["Scan Type", scanTypeLabel(c.scanType)],
+                      ["Captured", formatTimestamp(c.createdAt)],
                     ] as [string, string][]
                   ).map(([label, value]) => (
                     <div key={label} className="flex flex-col">
@@ -229,16 +250,39 @@ export default function TypistCasePage() {
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Radiologist&apos;s Notes</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="whitespace-pre-wrap font-mono text-sm">
-                  {c.radiologistNotes}
-                </p>
-              </CardContent>
-            </Card>
+            {c.radiologistNotes && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Typed Shorthand</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="whitespace-pre-wrap font-mono text-sm">
+                    {c.radiologistNotes}
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+
+            {c.notesImagePaths && c.notesImagePaths.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Photos</CardTitle>
+                  <CardDescription>
+                    {c.notesImagePaths.length} attached — Claude read these
+                    when generating the draft.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-1 text-xs text-muted-foreground">
+                    {c.notesImagePaths.map((p) => (
+                      <li key={p}>
+                        <code>{p.split("/").pop()}</code>
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            )}
           </div>
 
           <div className="md:col-span-2 space-y-6">
@@ -248,35 +292,31 @@ export default function TypistCasePage() {
                   <div>
                     <CardTitle>Report</CardTitle>
                     <CardDescription>
-                      {hasAIDraft
-                        ? "AI-drafted from the radiologist's notes; review, edit, and resolve any verify flags."
-                        : "Click Generate to draft from the radiologist's notes with Claude, or write it manually."}
+                      {isApproved
+                        ? "This case is approved. To re-export, open it from the Print Queue."
+                        : "Review the AI draft. Resolve verify flags, edit any text, then Approve to add the .docx to the Print Queue."}
                     </CardDescription>
                   </div>
-                  {!locked && (
+                  {canEdit && (
                     <Button
-                      onClick={handleGenerate}
+                      onClick={handleRegenerate}
                       disabled={busy !== null}
-                      variant={hasAIDraft ? "outline" : "default"}
+                      variant="outline"
                       size="sm"
                     >
                       {busy === "generate"
-                        ? hasAIDraft
-                          ? "Regenerating…"
-                          : "Generating…"
-                        : hasAIDraft
-                          ? "Regenerate"
-                          : "Generate report"}
+                        ? "Regenerating…"
+                        : "Regenerate from photo"}
                     </Button>
                   )}
                 </div>
               </CardHeader>
               <CardContent className="space-y-6">
-                {verifyFlags.length > 0 && (
+                {verifyFlags.length > 0 && canEdit && (
                   <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
                     <p className="mb-2 text-sm font-medium text-amber-900">
                       Verify ({resolvedFlags.size}/{verifyFlags.length}) —
-                      resolve all before submitting.
+                      resolve all before approving.
                     </p>
                     <ul className="space-y-1.5">
                       {verifyFlags.map((flag, idx) => (
@@ -289,7 +329,6 @@ export default function TypistCasePage() {
                             id={`vf-${idx}`}
                             checked={resolvedFlags.has(idx)}
                             onChange={(e) => toggleFlag(idx, e.target.checked)}
-                            disabled={locked}
                             className="mt-1"
                           />
                           <Label
@@ -311,21 +350,21 @@ export default function TypistCasePage() {
                 <ReportEditor
                   report={report}
                   onChange={setReport}
-                  disabled={locked}
+                  disabled={!canEdit}
                   showCompliance={isObstetric(c.scanType)}
                 />
 
-                {!locked ? (
+                {canEdit && (
                   <div className="flex justify-end gap-2">
                     <Button
                       variant="outline"
                       onClick={handleSave}
                       disabled={busy !== null}
                     >
-                      {busy === "save" ? "Saving…" : "Save draft"}
+                      {busy === "save" ? "Saving…" : "Save edits"}
                     </Button>
                     <Button
-                      onClick={handleSubmit}
+                      onClick={handleApprove}
                       disabled={busy !== null || !allFlagsResolved}
                       title={
                         !allFlagsResolved
@@ -333,17 +372,11 @@ export default function TypistCasePage() {
                           : undefined
                       }
                     >
-                      {busy === "submit"
-                        ? "Submitting…"
-                        : "Submit to reviewer"}
+                      {busy === "approve"
+                        ? "Approving…"
+                        : "Approve & send to Print Queue"}
                     </Button>
                   </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    This case is no longer pending typing — it&apos;s{" "}
-                    {STATUS_META[c.status].label.toLowerCase()}. Editing is
-                    disabled.
-                  </p>
                 )}
               </CardContent>
             </Card>

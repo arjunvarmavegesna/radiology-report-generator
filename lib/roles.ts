@@ -6,14 +6,11 @@ export const ROLE_LABELS: Record<Role, string> = {
   reviewer: "Reviewer",
 };
 
-/** Landing route for each role after login. */
-export const ROLE_HOME: Record<Role, string> = {
-  radiologist: "/radiologist/new",
-  typist: "/typist/queue",
-  reviewer: "/reviewer/queue",
-};
+/** Single-role app — every signed-in user lands on /capture regardless of
+ *  their legacy role claim. The Role type stays around so existing custom
+ *  claims and users/{uid} docs are still readable. */
+export const WORKSPACE_HOME = "/capture";
 
 export function roleHome(role: Role | null | undefined): string {
-  if (!role) return "/login";
-  return ROLE_HOME[role] ?? "/login";
+  return role ? WORKSPACE_HOME : "/login";
 }

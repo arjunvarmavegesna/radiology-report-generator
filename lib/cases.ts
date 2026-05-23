@@ -10,10 +10,34 @@ import {
   where,
   type Timestamp,
 } from "firebase/firestore";
-import { db } from "./firebase";
+import { ref as storageRef, uploadBytes } from "firebase/storage";
+import { db, storage } from "./firebase";
 import type { CaseDoc, NewCaseInput, ReportJSON } from "./types";
 
 const CASES = "cases";
+
+/** Sanitize a user-supplied filename for use in a Storage path. */
+function safeName(name: string, fallback: string): string {
+  const cleaned = name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80);
+  return cleaned.length > 0 ? cleaned : fallback;
+}
+
+async function uploadNotesImages(
+  caseId: string,
+  files: File[],
+): Promise<string[]> {
+  const paths: string[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    const filename = safeName(f.name, `photo-${i}.jpg`);
+    const path = `cases/${caseId}/notes/${i}-${filename}`;
+    await uploadBytes(storageRef(storage, path), f, {
+      contentType: f.type || "image/jpeg",
+    });
+    paths.push(path);
+  }
+  return paths;
+}
 
 function tsMillis(t: Timestamp | null): number {
   return t ? t.toMillis() : 0;
@@ -23,7 +47,9 @@ function mapCase(id: string, data: Record<string, unknown>): CaseDoc {
   return { id, ...(data as Omit<CaseDoc, "id">) };
 }
 
-/** Radiologist creates a new case → enters the typist queue. */
+/** Radiologist creates a new case → enters the typist queue. Optionally
+ *  uploads photos of handwritten notes to Storage and stores the paths on the
+ *  case doc so the AI generate step can pull them as vision inputs. */
 export async function createCase(
   input: NewCaseInput,
   radiologistId: string,
@@ -39,6 +65,7 @@ export async function createCase(
 
     radiologistId,
     radiologistNotes: input.radiologistNotes.trim(),
+    notesImagePaths: [],
 
     status: "pending_typing",
 
@@ -56,6 +83,16 @@ export async function createCase(
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+
+  const files = input.notesImages ?? [];
+  if (files.length > 0) {
+    const paths = await uploadNotesImages(ref.id, files);
+    await updateDoc(doc(db, CASES, ref.id), {
+      notesImagePaths: paths,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
   return ref.id;
 }
 
@@ -71,7 +108,10 @@ export async function getCasesByRadiologist(
     .sort((a, b) => tsMillis(b.createdAt) - tsMillis(a.createdAt));
 }
 
-/** Typist queue: cases awaiting typing, oldest first. */
+/** Typist queue: cases awaiting typing, oldest first.
+ *  Legacy — kept for back-compat with any in-flight cases stuck at
+ *  "pending_typing" because their AI draft failed. The new workflow advances
+ *  to pending_review as soon as /api/generate succeeds. */
 export async function getTypingQueue(): Promise<CaseDoc[]> {
   const snap = await getDocs(
     query(collection(db, CASES), where("status", "==", "pending_typing")),
@@ -81,7 +121,8 @@ export async function getTypingQueue(): Promise<CaseDoc[]> {
     .sort((a, b) => tsMillis(a.createdAt) - tsMillis(b.createdAt));
 }
 
-/** Reviewer queue: cases awaiting review, oldest first. */
+/** Review list: cases with an AI draft awaiting human approval. Oldest first
+ *  so the user works through them FIFO. */
 export async function getReviewQueue(): Promise<CaseDoc[]> {
   const snap = await getDocs(
     query(collection(db, CASES), where("status", "==", "pending_review")),
@@ -91,6 +132,20 @@ export async function getReviewQueue(): Promise<CaseDoc[]> {
     .sort(
       (a, b) =>
         tsMillis(a.typistSubmittedAt) - tsMillis(b.typistSubmittedAt),
+    );
+}
+
+/** Print queue: approved cases ready to download. Newest first so the most
+ *  recently approved case is at the top. */
+export async function getApprovedCases(): Promise<CaseDoc[]> {
+  const snap = await getDocs(
+    query(collection(db, CASES), where("status", "==", "approved")),
+  );
+  return snap.docs
+    .map((d) => mapCase(d.id, d.data()))
+    .sort(
+      (a, b) =>
+        tsMillis(b.reviewerApprovedAt) - tsMillis(a.reviewerApprovedAt),
     );
 }
 

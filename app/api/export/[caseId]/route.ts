@@ -59,23 +59,8 @@ export async function POST(
     return NextResponse.json({ error: "Invalid token" }, { status: 401 });
   }
 
-  // Reviewer claim required (fall back to users/{uid}.role if the claim is
-  // missing, matching the client-side auth context).
-  let role: string | undefined =
-    typeof decoded.role === "string" ? decoded.role : undefined;
-  if (!role) {
-    const userSnap = await adminDb()
-      .collection("users")
-      .doc(decoded.uid)
-      .get();
-    role = (userSnap.data()?.role as string | undefined) ?? undefined;
-  }
-  if (role !== "reviewer") {
-    return NextResponse.json(
-      { error: "Reviewer role required" },
-      { status: 403 },
-    );
-  }
+  // Single-role app — any signed-in user may approve+export. Role-based
+  // gating was removed when the three-role workflow collapsed into one.
 
   // --- Parse the body ---
   let body: { report?: ReportJSON };

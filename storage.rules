@@ -1,0 +1,32 @@
+rules_version = '2';
+
+// Firebase Storage security rules. Real authorization lives here, not in the
+// client-side AuthGuard. Two relevant paths:
+//
+//   cases/{caseId}/notes/{file}  — photos of handwritten radiologist notes
+//   final/{caseId}/{file}        — generated .docx for approved cases
+//
+// Final .docx files are written server-side via the Firebase Admin SDK
+// (`/api/export`), which bypasses these rules entirely. Clients fetch the
+// docx via short-lived signed URLs returned by the export route — those URLs
+// are pre-signed and also bypass rules. The `final/` read rule below is just
+// a courtesy for any client-side debug listing.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Notes photos: radiologist uploads from /capture before AI generation.
+    // Any signed-in workspace user can write. Capped at 6 MB to match the
+    // client-side 5 MB cap with a small buffer for opus/png overhead.
+    match /cases/{caseId}/notes/{file=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                   && request.resource.size < 6 * 1024 * 1024;
+    }
+
+    // Approved-report .docx files. Server writes; client reads via signed URL.
+    match /final/{caseId}/{file=**} {
+      allow read: if request.auth != null;
+    }
+  }
+}

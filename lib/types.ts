@@ -45,6 +45,9 @@ export interface CaseDoc {
 
   radiologistId: string;
   radiologistNotes: string; // the shorthand
+  /** Storage paths to uploaded photos of the radiologist's handwritten notes.
+   *  AI generation will base64-encode each and include it as a vision input. */
+  notesImagePaths?: string[];
 
   status: CaseStatus;
 
@@ -73,6 +76,9 @@ export interface NewCaseInput {
   refDoctor: string;
   scanType: string;
   radiologistNotes: string;
+  /** Optional photos of handwritten findings. Either notes text or at least
+   *  one image must be present. */
+  notesImages?: File[];
 }
 
 /** A user profile (`users/{uid}`). Role is mirrored into a custom claim. */
