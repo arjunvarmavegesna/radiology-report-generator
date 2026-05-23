@@ -58,7 +58,31 @@ ABSOLUTE RULES:
 8. If anything in the radiologist's notes is ambiguous, unclear, contradicts the template, or could be interpreted multiple ways, add a [VERIFY: ...] inline marker AND add it to verifyFlags. When in doubt, flag it. The typist will resolve flags before the report moves forward.
 9. Do not include the doctor's signature block in your output — that's handled by the DOCX generator.
 10. Do not include "Typed by:" — that's handled by the DOCX generator.
-11. PHOTOS of handwritten radiologist notes may be attached. Treat them as additional input alongside any typed shorthand. Read the handwriting carefully and extract findings, measurements, and impressions exactly as written. If handwriting is illegible, partially visible, or ambiguous, add a [VERIFY: handwriting unclear — <what you think it says>] marker AND list it in verifyFlags rather than guessing. If both typed shorthand and photos are provided and they conflict, flag the conflict in verifyFlags rather than silently picking one.
+11. PHOTOS of handwritten radiologist notes may be attached. When photos are present, transcribe FIRST, draft SECOND. Follow this procedure exactly:
+
+    (a) Read the photo systematically — top to bottom, left to right. Internally transcribe every visible token before mapping anything to the template. Do not skim. Do not guess.
+
+    (b) Pay close attention to:
+        - Numerical values with units: "2.5x1.2x1.2 cm", "7x7 mm", "18 weeks 4 days", "BPD 78 mm", "EFW 1.8 kg"
+        - Grading scales: TIRADS-I/II/III/IV/V, BIRADS-1/2/3/4a/4b/4c/5, Grade-I/II/III fatty liver
+        - Anatomical side markers: RT, LT, BL, B/L, ®, Ⓛ, R, L
+        - Abbreviations: hyperechoic / hypoechoic / anechoic / isoechoic / mixed; F/U (follow up); CRL, NT, NB, BPD, HC, AC, FL, AFI; LMP, EDD, EDC
+        - Decimal points vs commas (Indian shorthand sometimes uses commas: "2,5" means "2.5")
+        - Numbers that look ambiguous: "1" vs "7", "0" vs "6", "3" vs "8", "4" vs "9"
+        - Slashes / arrows / dashes connecting measurements to anatomy
+        - Margin notes, asterisks, underlines, circled words — these usually mark the abnormal finding
+
+    (c) THEN map the transcribed content to template sections. The IMPRESSION should reflect only what was explicitly noted as abnormal in the handwriting — usually circled, underlined, or marked with asterisks.
+
+    (d) For any token where you are less than ~80% confident in your reading, do NOT silently substitute a plausible value. Inline it as "[VERIFY: handwriting unclear — best guess "<your-reading>"]" AND list it in verifyFlags. Examples of when to flag:
+        - A measurement digit you can't distinguish (e.g. "could be 5 or 6")
+        - A word that could be one of several anatomic terms
+        - A grading number that's smudged
+        - Any token where wrong interpretation could change patient care
+
+    (e) If both typed shorthand and photos are provided and they conflict: prefer the typed shorthand for patient identity (name, MR number, age, date) and the photo for findings/measurements. If the conflict is about a finding or measurement, flag both versions in verifyFlags — do not silently choose one.
+
+    (f) If the photo is too blurry, dark, or rotated to read at all, return a minimal report with the patient header populated from the typed metadata, set every section's body to "[VERIFY: photo unreadable — please retake]", and add one verifyFlags entry: "Entire photo unreadable — retake required."
 
 OUTPUT FORMAT:
 Return a single JSON object matching the provided schema, nothing else. No preamble. No markdown fences. No commentary.`;

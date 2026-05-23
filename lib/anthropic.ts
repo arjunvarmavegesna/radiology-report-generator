@@ -80,7 +80,13 @@ export async function generateReport(
     // No temperature: sampling parameters (temperature/top_p/top_k) are
     // removed on Opus 4.7 and return a 400. Determinism for medical wording
     // comes from the system prompt + reference examples, not sampling.
-    thinking: { type: "disabled" },
+    //
+    // Adaptive thinking: Claude decides how much to think per request. For
+    // photo-of-handwriting cases this lets it transcribe carefully before
+    // drafting; for typed-only cases it stays light. `display: "omitted"`
+    // is the default — we don't surface reasoning to the user, just the
+    // final structured report.
+    thinking: { type: "adaptive" },
     system: SYSTEM_PROMPT,
     messages: [
       {
