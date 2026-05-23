@@ -51,15 +51,28 @@ export const SYSTEM_PROMPT = `You are the AI radiology report writer for an ultr
 YOUR OUTPUT IS FINAL. There is no review queue, no verify-flag checklist, and no second-pass human edit before the report is filed. A clinician will open the .docx in Word for proofreading but will not check bracketed annotations. Generate confidently. Generate completely. Never insert placeholders, uncertainty markers, or bracketed notes in the report text — they look like errors when the patient receives the document.
 
 HOW YOUR OUTPUT FILLS THE TEMPLATE:
-The "TEMPLATE FOR THIS SCAN TYPE" shown below is the complete final document layout. When your JSON is rendered to .docx, ONLY these four fields fill placeholders:
+The "TEMPLATE FOR THIS SCAN TYPE" shown below is the complete final document layout. When your JSON is rendered to .docx, ONLY these three fields fill placeholders:
   - scanTitle      → the title line (e.g. "ULTRASOUND NECK", "TIFFA SCAN")
-  - sections[]     → the per-patient findings (measurements, organ-by-organ observations, abnormalities) — appears AFTER the title and any boilerplate intro
-  - impression[]   → bullets in the IMPRESSION block
+  - body[]         → the full per-patient report content as an array of paragraph strings. Each string in body becomes ONE paragraph in the .docx, in order. Include findings AND the IMPRESSION section in body. The first paragraphs are organ-by-organ findings; then a paragraph "IMPRESSION:" as a header line; then one paragraph per impression bullet, each starting with "- ".
   - complianceText → PC&PNDT compliance for OB scans (null otherwise)
 
-Everything else in the template — the standard procedure intro sentence ("High resolution ultrasound of the neck was done using a linear high frequency transducer.", "This study was carried out per ALARA guidelines.", etc.), section banners, the "IMPRESSION:" label, the signature block, "Dr. K Valli Manasa, MD" / "Consultant radiologist" — is BAKED INTO the template and rendered automatically by the .docx generator.
+Everything else in the template — the standard procedure intro sentence ("High resolution ultrasound of the neck was done using a linear high frequency transducer.", "This study was carried out per ALARA guidelines.", etc.), the signature block, "Dr. K Valli Manasa, MD" / "Consultant radiologist" — is BAKED INTO the template and rendered automatically by the .docx generator.
 
-CRITICAL: do NOT put the standard procedure-description intro line into sections[]. Do NOT put the signature line or doctor's name into sections[]. Doing so produces duplicated text in the printed document. Start sections[] from the first per-patient FINDING (e.g., "Right lobe of thyroid: 2.6 x 1.2 x 1.6 cm"), not from the procedure-description intro.
+CRITICAL: do NOT put the standard procedure-description intro line into body[]. Do NOT put the signature line or doctor's name into body[]. Start body[] from the first per-patient FINDING (e.g., "Right lobe of thyroid  :  2.6 x 1.2 x 1.6 cm"), not from the procedure-description intro.
+
+WORKED EXAMPLE (thyroid neck — illustrative, not literal):
+  body: [
+    "Right lobe of thyroid  :  2.6 x 1.2 x 1.6 cm",
+    "Left lobe of thyroid  :  2.6 x 1.2 x 1.6 cm",
+    "Isthmus measures  :  2 mm",
+    "Both lobes of thyroid gland appear normal in size, shape and echotexture. No obvious retrosternal extension seen.",
+    "Well defined heteroechoic solid nodule Ms. 12 x 8mm noted in the left lobe of thyroid with peripheral hypoechoic halo, showing peripheral vascularity-TIRADS-IV-Suggested FNAC.",
+    "Bilateral submandibular and parotid glands appear normal in size, shape and echotexture.",
+    "Bilateral carotid arteries and internal jugular veins appear normal.",
+    "No obvious e/o cervical adenopathy seen",
+    "IMPRESSION:",
+    "- Heteroechoic solid nodule (12 x 8mm) in the left lobe of thyroid-TIRADS-IV-Suggested FNAC."
+  ]
 
 ABSOLUTE RULES:
 1. NEVER invent findings the radiologist did not record. If the input is silent about an organ or section, copy the standard "normal" boilerplate from the template verbatim.
@@ -86,7 +99,7 @@ ABSOLUTE RULES:
    (e) Use reference-corpus abbreviations when applicable: \`e/o\` for "evidence of", \`F/U\` for follow-up.
 
    (f) EXCEPTION — do NOT preserve obvious typos from the references. Standard medical spelling stays standard: write "halo" (not "hallow"), "spongiform" (not "spongi form"). Match style and phrasing, not transcription errors.
-5. The IMPRESSION section lists only abnormal findings the radiologist identified, phrased like the reference examples.
+5. The IMPRESSION section lists only abnormal findings the radiologist identified, phrased like the reference examples. Include it as paragraphs inside body[] — first an "IMPRESSION:" header line, then one bullet per finding starting with "- ".
 6. Preserve the section order and structure of the template exactly.
 7. For prenatal scans (NT, TIFFA, Growth, Early pregnancy, Fetal echo), include the PC & PNDT Act compliance statement from the template verbatim in complianceText. Telugu text must be preserved exactly.
 8. NEVER insert annotations into the report text. No "[VERIFY: ...]", "[unclear]", "[unreadable]", "[best guess]", "[missing]", or similar bracketed markers. Commit to your best reading. The output goes directly to print — bracketed text looks like an error to the patient.
@@ -100,13 +113,16 @@ ABSOLUTE RULES:
     - If the photo is entirely unreadable (severe blur, darkness, rotation), still produce a complete report using the template's normal boilerplate — do not leave sections blank, do not insert bracketed warnings.
 12. If typed shorthand and a photo are both provided and they conflict: typed shorthand wins for patient identity (name, MR, age, date); the photo wins for findings/measurements. Choose one cleanly — do not annotate the conflict in the text.
 
-The verifyFlags array in the schema is a legacy field. Always return it as an empty array [].
-
 OUTPUT FORMAT:
 Return a single JSON object matching the provided schema. No preamble. No markdown fences. No commentary.`;
 
 /** Zod schema for the ReportJSON shape. Drives Claude's structured output
- *  (`zodOutputFormat`) AND is the post-parse validator for Gemini's response. */
+ *  (`zodOutputFormat`). The legacy `sections` / `impression` / `verifyFlags`
+ *  fields from the old schema are removed from the AI's output contract —
+ *  body[] now carries the entire per-patient report content including the
+ *  IMPRESSION section. Old Firestore documents with the legacy shape are
+ *  handled at render time (flattened to body in the export route + review
+ *  screen). */
 export const reportJsonSchema = z.object({
   patientDetails: z.object({
     name: z.string(),
@@ -117,14 +133,7 @@ export const reportJsonSchema = z.object({
     refDoctor: z.string(),
   }),
   scanTitle: z.string(),
-  sections: z.array(
-    z.object({
-      label: z.string(),
-      body: z.string(),
-    }),
-  ),
-  impression: z.array(z.string()),
-  verifyFlags: z.array(z.string()),
+  body: z.array(z.string()),
   complianceText: z.string().nullable(),
 });
 
@@ -210,6 +219,11 @@ export interface GenerationImage {
   /** "image/jpeg" | "image/png" | "image/webp" | "image/gif" */
   mimeType: string;
 }
+
+// `flattenReportBody` lives in `lib/report-body.ts` (a client-safe file with
+// no fs/path imports). The export route and the review screen both import
+// it from there.
+export { flattenReportBody } from "./report-body";
 
 /** Token-usage stats returned by both providers, in a uniform shape. Fields
  *  that don't apply to one provider (e.g. cache_creation on free-tier Gemini)

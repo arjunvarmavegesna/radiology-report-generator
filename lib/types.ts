@@ -16,19 +16,30 @@ export interface PatientDetails {
   refDoctor: string;
 }
 
+/** Legacy structured-section shape. Older approved cases in Firestore still
+ *  have this; new AI generations use the flat `body: string[]` instead.
+ *  Kept on the interface for back-compat reading + on-the-fly flattening. */
 export interface ReportSection {
   label: string;
   body: string;
 }
 
-/** The structured report the AI produces and humans edit. */
+/** The report shape the AI emits and humans edit. The primary editable area
+ *  is `body` — an array where each string becomes one paragraph in the .docx.
+ *  Findings AND IMPRESSION live in `body` so the review screen can edit
+ *  everything as one continuous text. The legacy `sections` + `impression` +
+ *  `verifyFlags` fields are optional for back-compat with older Firestore
+ *  documents and are flattened into `body` when rendering. */
 export interface ReportJSON {
   patientDetails: PatientDetails;
   scanTitle: string;
-  sections: ReportSection[];
-  impression: string[];
-  verifyFlags: string[];
+  body: string[];
   complianceText: string | null; // only OB scans
+
+  // --- Legacy fields, optional ---
+  sections?: ReportSection[];
+  impression?: string[];
+  verifyFlags?: string[];
 }
 
 /** A case document as stored in Firestore (`cases/{caseId}`). */

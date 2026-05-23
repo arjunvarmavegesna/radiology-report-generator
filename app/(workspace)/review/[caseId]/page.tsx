@@ -9,8 +9,8 @@ import { getCase, saveReviewerDraft } from "@/lib/cases";
 import { SCAN_TYPES, scanTypeLabel } from "@/lib/scan-types";
 import { STATUS_META, formatTimestamp } from "@/lib/format";
 import { openInWord } from "@/lib/office-url";
+import { flattenReportBody } from "@/lib/report-body";
 import type { CaseDoc, ReportJSON } from "@/lib/types";
-import { ReportEditor } from "@/components/report-editor";
 import {
   Card,
   CardContent,
@@ -21,6 +21,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 function isObstetric(scanType: string): boolean {
   return SCAN_TYPES.find((s) => s.value === scanType)?.isObstetric ?? false;
@@ -37,21 +39,30 @@ function emptyReport(c: CaseDoc): ReportJSON {
       refDoctor: c.refDoctor,
     },
     scanTitle: scanTypeLabel(c.scanType).toUpperCase(),
-    sections: [{ label: "", body: "" }],
-    impression: [""],
-    verifyFlags: [],
+    body: [],
     complianceText: isObstetric(c.scanType) ? "" : null,
   };
 }
 
-function cleanReport(r: ReportJSON): ReportJSON {
-  return {
-    ...r,
-    sections: r.sections.filter((s) => s.label.trim() || s.body.trim()),
-    impression: r.impression.map((s) => s.trim()).filter(Boolean),
-    complianceText:
-      r.complianceText && r.complianceText.trim() ? r.complianceText : null,
-  };
+/** Turn the report's body[] (new shape) — or sections+impression (legacy
+ *  approved cases) — into a single editable text blob, one paragraph per
+ *  line. The reviewer edits this freely; on save we split back to body[]. */
+function reportToText(r: ReportJSON): string {
+  const paragraphs = flattenReportBody(r);
+  return paragraphs.join("\n");
+}
+
+/** Reverse of reportToText. Each non-empty line becomes one paragraph in
+ *  body[]; empty lines are kept (so the user can insert blank lines for
+ *  visual spacing in the .docx). */
+function textToBody(text: string): string[] {
+  // Preserve the user's line breaks verbatim. Trim trailing-only blanks
+  // so the docx doesn't end with random empty paragraphs.
+  const lines = text.split(/\r?\n/);
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") {
+    lines.pop();
+  }
+  return lines;
 }
 
 export default function ReviewDetailPage() {
@@ -61,28 +72,29 @@ export default function ReviewDetailPage() {
   const { user } = useAuth();
 
   const [c, setC] = useState<CaseDoc | null>(null);
-  const [report, setReport] = useState<ReportJSON | null>(null);
+  const [scanTitle, setScanTitle] = useState("");
+  const [bodyText, setBodyText] = useState("");
+  const [complianceText, setComplianceText] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<
-    null | "save" | "approve" | "generate"
-  >(null);
-  const [resolvedFlags, setResolvedFlags] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState<null | "save" | "approve" | "generate">(
+    null,
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
     const data = await getCase(id);
     setC(data);
     if (data) {
-      setReport(
-        data.finalReport ??
-          data.editedReport ??
-          data.draftReport ??
-          emptyReport(data),
-      );
+      const src =
+        data.finalReport ?? data.editedReport ?? data.draftReport ?? emptyReport(data);
+      setScanTitle(src.scanTitle ?? "");
+      setBodyText(reportToText(src));
+      setComplianceText(src.complianceText ?? null);
     } else {
-      setReport(null);
+      setScanTitle("");
+      setBodyText("");
+      setComplianceText(null);
     }
-    setResolvedFlags(new Set());
     setLoading(false);
   }, [id]);
 
@@ -92,9 +104,24 @@ export default function ReviewDetailPage() {
 
   const isApproved = !!c && c.status === "approved";
   const canEdit = !!c && !isApproved;
-  const verifyFlags = report?.verifyFlags ?? [];
-  const allFlagsResolved =
-    verifyFlags.length === 0 || resolvedFlags.size === verifyFlags.length;
+
+  function buildReport(): ReportJSON | null {
+    if (!c) return null;
+    return {
+      patientDetails: {
+        name: c.patientName,
+        age: c.age,
+        gender: c.gender,
+        mrNumber: c.mrNumber,
+        date: c.dateOfExam,
+        refDoctor: c.refDoctor,
+      },
+      scanTitle: scanTitle.trim(),
+      body: textToBody(bodyText),
+      complianceText:
+        complianceText && complianceText.trim() ? complianceText : null,
+    };
+  }
 
   async function handleRegenerate() {
     if (!user || !c) return;
@@ -112,14 +139,10 @@ export default function ReviewDetailPage() {
       if (!resp.ok || !data.report) {
         throw new Error(data.error || `Generation failed (${resp.status})`);
       }
-      setReport(data.report);
-      setResolvedFlags(new Set());
-      const flagCount = data.report.verifyFlags.length;
-      toast.success(
-        flagCount > 0
-          ? `Draft refreshed. Resolve ${flagCount} verify flag${flagCount === 1 ? "" : "s"} before approving.`
-          : "Draft refreshed.",
-      );
+      setScanTitle(data.report.scanTitle ?? "");
+      setBodyText(reportToText(data.report));
+      setComplianceText(data.report.complianceText ?? null);
+      toast.success("Draft refreshed.");
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "AI generation failed.",
@@ -130,10 +153,12 @@ export default function ReviewDetailPage() {
   }
 
   async function handleSave() {
-    if (!user || !report) return;
+    if (!user) return;
+    const report = buildReport();
+    if (!report) return;
     setBusy("save");
     try {
-      await saveReviewerDraft(id, cleanReport(report), user.uid);
+      await saveReviewerDraft(id, report, user.uid);
       toast.success("Edits saved.");
       await load();
     } catch (err) {
@@ -144,22 +169,15 @@ export default function ReviewDetailPage() {
   }
 
   async function handleApprove() {
-    if (!user || !report) return;
-    if (!allFlagsResolved) {
-      toast.error("Resolve all verify flags before approving.");
-      return;
-    }
-    const cleaned = cleanReport(report);
-    if (!cleaned.scanTitle.trim()) {
+    if (!user) return;
+    const report = buildReport();
+    if (!report) return;
+    if (!report.scanTitle) {
       toast.error("Scan title is required.");
       return;
     }
-    if (cleaned.sections.length === 0) {
-      toast.error("Add at least one section.");
-      return;
-    }
-    if (cleaned.impression.length === 0) {
-      toast.error("Add at least one impression line.");
+    if (report.body.length === 0) {
+      toast.error("Report body is empty.");
       return;
     }
 
@@ -172,7 +190,7 @@ export default function ReviewDetailPage() {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ report: cleaned }),
+        body: JSON.stringify({ report }),
       });
       const data = (await resp.json()) as {
         downloadUrl?: string;
@@ -181,9 +199,6 @@ export default function ReviewDetailPage() {
       if (!resp.ok || !data.downloadUrl) {
         throw new Error(data.error || `Export failed (${resp.status})`);
       }
-      // Launch Word directly on the freshly-signed URL. The browser may show
-      // an "Open Microsoft Word?" prompt on first use — clicking Open
-      // launches Word with the report ready to print.
       openInWord(data.downloadUrl);
       toast.success("Approved — opening in Word and adding to Print Queue.");
       router.push("/queue");
@@ -196,15 +211,6 @@ export default function ReviewDetailPage() {
     }
   }
 
-  function toggleFlag(idx: number, checked: boolean) {
-    setResolvedFlags((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(idx);
-      else next.delete(idx);
-      return next;
-    });
-  }
-
   return (
     <div className="space-y-4">
       <Button asChild variant="ghost" size="sm">
@@ -213,7 +219,7 @@ export default function ReviewDetailPage() {
 
       {loading ? (
         <p className="text-muted-foreground">Loading…</p>
-      ) : !c || !report ? (
+      ) : !c ? (
         <p className="text-muted-foreground">Case not found.</p>
       ) : (
         <div className="grid md:grid-cols-3 gap-6">
@@ -294,7 +300,7 @@ export default function ReviewDetailPage() {
                     <CardDescription>
                       {isApproved
                         ? "This case is approved. To re-export, open it from the Print Queue."
-                        : "Review the AI draft. Resolve verify flags, edit any text, then Approve to add the .docx to the Print Queue."}
+                        : "Edit the entire report as plain text — one paragraph per line. Click Approve when ready to render the .docx."}
                     </CardDescription>
                   </div>
                   {canEdit && (
@@ -311,51 +317,53 @@ export default function ReviewDetailPage() {
                   )}
                 </div>
               </CardHeader>
-              <CardContent className="space-y-6">
-                {verifyFlags.length > 0 && canEdit && (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
-                    <p className="mb-2 text-sm font-medium text-amber-900">
-                      Verify ({resolvedFlags.size}/{verifyFlags.length}) —
-                      resolve all before approving.
-                    </p>
-                    <ul className="space-y-1.5">
-                      {verifyFlags.map((flag, idx) => (
-                        <li
-                          key={idx}
-                          className="flex items-start gap-2 text-sm"
-                        >
-                          <input
-                            type="checkbox"
-                            id={`vf-${idx}`}
-                            checked={resolvedFlags.has(idx)}
-                            onChange={(e) => toggleFlag(idx, e.target.checked)}
-                            className="mt-1"
-                          />
-                          <Label
-                            htmlFor={`vf-${idx}`}
-                            className={
-                              resolvedFlags.has(idx)
-                                ? "text-amber-700 line-through"
-                                : "text-amber-900"
-                            }
-                          >
-                            {flag}
-                          </Label>
-                        </li>
-                      ))}
-                    </ul>
+              <CardContent className="space-y-4">
+                <div className="space-y-1">
+                  <Label htmlFor="scanTitle">Scan Title</Label>
+                  <Input
+                    id="scanTitle"
+                    value={scanTitle}
+                    onChange={(e) => setScanTitle(e.target.value)}
+                    disabled={!canEdit}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="bodyText">Report Body</Label>
+                  <Textarea
+                    id="bodyText"
+                    value={bodyText}
+                    onChange={(e) => setBodyText(e.target.value)}
+                    disabled={!canEdit}
+                    rows={24}
+                    className="font-mono text-sm leading-relaxed"
+                    placeholder="Each line becomes one paragraph in the Word document."
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    One paragraph per line. Include the IMPRESSION section
+                    inline (header + dashed bullets) — see the AI draft for
+                    the conventional layout.
+                  </p>
+                </div>
+
+                {isObstetric(c.scanType) && (
+                  <div className="space-y-1">
+                    <Label htmlFor="complianceText">
+                      PC&amp;PNDT Compliance Text
+                    </Label>
+                    <Textarea
+                      id="complianceText"
+                      value={complianceText ?? ""}
+                      onChange={(e) => setComplianceText(e.target.value)}
+                      disabled={!canEdit}
+                      rows={6}
+                      className="font-mono text-xs leading-relaxed"
+                    />
                   </div>
                 )}
 
-                <ReportEditor
-                  report={report}
-                  onChange={setReport}
-                  disabled={!canEdit}
-                  showCompliance={isObstetric(c.scanType)}
-                />
-
                 {canEdit && (
-                  <div className="flex justify-end gap-2">
+                  <div className="flex justify-end gap-2 pt-2">
                     <Button
                       variant="outline"
                       onClick={handleSave}
@@ -365,12 +373,7 @@ export default function ReviewDetailPage() {
                     </Button>
                     <Button
                       onClick={handleApprove}
-                      disabled={busy !== null || !allFlagsResolved}
-                      title={
-                        !allFlagsResolved
-                          ? "Resolve all verify flags first"
-                          : undefined
-                      }
+                      disabled={busy !== null}
                     >
                       {busy === "approve"
                         ? "Approving…"

@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminDb, adminStorage } from "@/lib/firebase-admin";
 import { SCAN_TYPES } from "@/lib/scan-types";
+import { flattenReportBody } from "@/lib/report-body";
 import type { ReportJSON } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -122,11 +123,10 @@ export async function POST(
       date: report.patientDetails.date ?? "",
       refDoctor: report.patientDetails.refDoctor ?? "",
       scanTitle: report.scanTitle ?? "",
-      sections: (report.sections ?? []).map((s) => ({
-        label: s.label,
-        body: s.body,
-      })),
-      impression: report.impression ?? [],
+      // Templates expect a flat `body: string[]` loop. New reports already
+      // carry body; legacy approved cases still have sections + impression
+      // — flattenReportBody handles both shapes transparently.
+      body: flattenReportBody(report),
       complianceText: report.complianceText ?? null,
     });
     outBuf = doc.getZip().generate({ type: "nodebuffer" }) as Buffer;

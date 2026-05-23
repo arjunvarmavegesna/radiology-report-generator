@@ -8,9 +8,12 @@ import { Separator } from "@/components/ui/separator";
 import type { ReportJSON, ReportSection } from "@/lib/types";
 
 /**
- * Structured editor for a ReportJSON. Used by the typist (Phase 1: manual
- * entry) and the reviewer (Phase 1: final edits before approval). Phase 2
- * will replace this with Tiptap + AI-generated content + [VERIFY] flags.
+ * Structured editor for a ReportJSON. Legacy — the live review screen at
+ * /review/[caseId] now uses a single Textarea bound to body[] (one
+ * paragraph per line) instead of this per-section editor. This component
+ * is kept compilable against the new optional-field ReportJSON shape in
+ * case someone wants to bring back the structured editing UI; it operates
+ * on the legacy `sections` + `impression` fields with empty-array fallbacks.
  */
 export function ReportEditor({
   report,
@@ -23,39 +26,42 @@ export function ReportEditor({
   disabled?: boolean;
   showCompliance?: boolean;
 }) {
+  const sections = report.sections ?? [];
+  const impression = report.impression ?? [];
+
   function set<K extends keyof ReportJSON>(key: K, value: ReportJSON[K]) {
     onChange({ ...report, [key]: value });
   }
   function updateSection(i: number, patch: Partial<ReportSection>) {
     set(
       "sections",
-      report.sections.map((s, idx) => (idx === i ? { ...s, ...patch } : s)),
+      sections.map((s, idx) => (idx === i ? { ...s, ...patch } : s)),
     );
   }
   function addSection() {
-    set("sections", [...report.sections, { label: "", body: "" }]);
+    set("sections", [...sections, { label: "", body: "" }]);
   }
   function removeSection(i: number) {
-    if (report.sections.length <= 1) return;
+    if (sections.length <= 1) return;
     set(
       "sections",
-      report.sections.filter((_, idx) => idx !== i),
+      sections.filter((_, idx) => idx !== i),
     );
   }
   function updateImpression(i: number, v: string) {
     set(
       "impression",
-      report.impression.map((s, idx) => (idx === i ? v : s)),
+      impression.map((s, idx) => (idx === i ? v : s)),
     );
   }
   function addImpression() {
-    set("impression", [...report.impression, ""]);
+    set("impression", [...impression, ""]);
   }
   function removeImpression(i: number) {
-    if (report.impression.length <= 1) return;
+    if (impression.length <= 1) return;
     set(
       "impression",
-      report.impression.filter((_, idx) => idx !== i),
+      impression.filter((_, idx) => idx !== i),
     );
   }
 
@@ -87,7 +93,7 @@ export function ReportEditor({
             </Button>
           )}
         </div>
-        {report.sections.map((s, i) => (
+        {sections.map((s, i) => (
           <div key={i} className="space-y-2 rounded-md border p-3">
             <div className="flex items-center gap-2">
               <Input
@@ -97,7 +103,7 @@ export function ReportEditor({
                 onChange={(e) => updateSection(i, { label: e.target.value })}
                 disabled={disabled}
               />
-              {!disabled && report.sections.length > 1 && (
+              {!disabled && sections.length > 1 && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -135,7 +141,7 @@ export function ReportEditor({
             </Button>
           )}
         </div>
-        {report.impression.map((imp, i) => (
+        {impression.map((imp, i) => (
           <div key={i} className="flex items-start gap-2">
             <Textarea
               rows={2}
@@ -144,7 +150,7 @@ export function ReportEditor({
               onChange={(e) => updateImpression(i, e.target.value)}
               disabled={disabled}
             />
-            {!disabled && report.impression.length > 1 && (
+            {!disabled && impression.length > 1 && (
               <Button
                 type="button"
                 variant="ghost"
