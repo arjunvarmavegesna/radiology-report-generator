@@ -27,12 +27,37 @@ import { useAuth } from "@/lib/auth-context";
 import { createCase } from "@/lib/cases";
 import { SCAN_TYPES } from "@/lib/scan-types";
 import { todayInputDate, inputDateToDDMMYYYY } from "@/lib/format";
-import { openInWord } from "@/lib/office-url";
-import type { Gender, ReportJSON } from "@/lib/types";
+import type { Gender } from "@/lib/types";
 
 const MAX_PHOTOS = 3;
 const MAX_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_MIME = /^image\/(jpeg|jpg|png|webp|gif)$/i;
+
+/** sessionStorage key for in-progress form state.
+ *
+ *  Why this exists: on Android Chrome, launching the camera via
+ *  `<input capture="environment">` puts the browser process in the background.
+ *  On low-memory devices the tab gets killed, and when the user returns from
+ *  the camera the page is reloaded — React state vanishes and the form looks
+ *  blank. Persisting the text fields to sessionStorage and restoring on mount
+ *  fixes "I filled the form, opened the camera, and lost everything."
+ *
+ *  Photos themselves can't easily survive a reload (File objects don't
+ *  serialize and base64 versions blow past sessionStorage's ~5 MB ceiling on
+ *  mobile), so the photo array stays ephemeral. In practice that's fine — the
+ *  user just took the photo, so re-taking is one tap. */
+const DRAFT_KEY = "rrg.capture.draft.v1";
+
+interface DraftFields {
+  patientName: string;
+  age: string;
+  gender: Gender;
+  mrNumber: string;
+  date: string;
+  refDoctor: string;
+  scanType: string;
+  radiologistNotes: string;
+}
 
 export default function CapturePage() {
   const router = useRouter();
@@ -47,11 +72,82 @@ export default function CapturePage() {
   const [scanType, setScanType] = useState("");
   const [radiologistNotes, setRadiologistNotes] = useState("");
   const [photos, setPhotos] = useState<File[]>([]);
-  const [phase, setPhase] = useState<
-    "idle" | "uploading" | "generating" | "rendering"
-  >("idle");
+  const [phase, setPhase] = useState<"idle" | "uploading" | "generating">(
+    "idle",
+  );
+  // Don't write to sessionStorage until the restore-from-storage effect has
+  // run; otherwise the first render persists the empty initial state and
+  // wipes the saved draft.
+  const [hydrated, setHydrated] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Restore saved draft on mount (mobile camera-intent recovery).
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      setHydrated(true);
+      return;
+    }
+    try {
+      const raw = sessionStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) as Partial<DraftFields>;
+        if (saved.patientName) setPatientName(saved.patientName);
+        if (saved.age) setAge(saved.age);
+        if (saved.gender) setGender(saved.gender);
+        if (saved.mrNumber) setMrNumber(saved.mrNumber);
+        if (saved.date) setDate(saved.date);
+        if (saved.refDoctor) setRefDoctor(saved.refDoctor);
+        if (saved.scanType) setScanType(saved.scanType);
+        if (saved.radiologistNotes) setRadiologistNotes(saved.radiologistNotes);
+      }
+    } catch {
+      /* malformed JSON — ignore */
+    }
+    setHydrated(true);
+  }, []);
+
+  // Persist text-field state on every change. Photos are NOT persisted (see
+  // note on DRAFT_KEY); on mobile, if the page reloads after the camera
+  // intent, the user re-taps "Add photo" — text fields are already restored.
+  useEffect(() => {
+    if (!hydrated) return;
+    if (typeof window === "undefined") return;
+    try {
+      const draft: DraftFields = {
+        patientName,
+        age,
+        gender,
+        mrNumber,
+        date,
+        refDoctor,
+        scanType,
+        radiologistNotes,
+      };
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch {
+      /* quota exceeded etc. — non-fatal */
+    }
+  }, [
+    hydrated,
+    patientName,
+    age,
+    gender,
+    mrNumber,
+    date,
+    refDoctor,
+    scanType,
+    radiologistNotes,
+  ]);
+
+  function clearDraft() {
+    if (typeof window === "undefined") return;
+    try {
+      sessionStorage.removeItem(DRAFT_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
 
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   useEffect(() => {
@@ -132,62 +228,34 @@ export default function CapturePage() {
       return;
     }
 
-    // Two-step: AI generates → server renders the .docx → open in Word.
-    let report: ReportJSON;
+    // Form successfully submitted — clear the saved draft so the next visit
+    // starts fresh.
+    clearDraft();
+
+    setPhase("generating");
     try {
-      setPhase("generating");
       const token = await user.getIdToken();
-      const genResp = await fetch(`/api/generate/${caseId}`, {
+      const resp = await fetch(`/api/generate/${caseId}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
-      const genData = (await genResp.json()) as {
-        report?: ReportJSON;
-        error?: string;
-      };
-      if (!genResp.ok || !genData.report) {
-        throw new Error(
-          genData.error ?? `AI generation failed (${genResp.status})`,
-        );
+      if (!resp.ok) {
+        const body = (await resp.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(body.error ?? `AI generation failed (${resp.status})`);
       }
-      report = genData.report;
+      toast.success("Draft ready — opening for review.");
+      router.push(`/review/${caseId}`);
     } catch (err) {
+      // Case exists in Firestore even if AI failed. Send the user to /review
+      // anyway so they can retry generation.
       toast.error(
-        err instanceof Error ? err.message : "AI generation failed.",
+        err instanceof Error
+          ? err.message
+          : "AI generation failed — opening case to retry.",
       );
-      router.push("/queue");
-      setPhase("idle");
-      return;
-    }
-
-    try {
-      setPhase("rendering");
-      const token = await user.getIdToken();
-      const expResp = await fetch(`/api/export/${caseId}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ report }),
-      });
-      const expData = (await expResp.json()) as {
-        downloadUrl?: string;
-        error?: string;
-      };
-      if (!expResp.ok || !expData.downloadUrl) {
-        throw new Error(
-          expData.error ?? `Word render failed (${expResp.status})`,
-        );
-      }
-      openInWord(expData.downloadUrl);
-      toast.success("Report ready — opening in Word.");
-      router.push("/queue");
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Word render failed.",
-      );
-      router.push("/queue");
+      router.push(`/review/${caseId}`);
     } finally {
       setPhase("idle");
     }
@@ -199,9 +267,7 @@ export default function CapturePage() {
       ? "Uploading photos…"
       : phase === "generating"
         ? "AI drafting report…"
-        : phase === "rendering"
-          ? "Rendering Word document…"
-          : "Generate Report";
+        : "Capture & Send to Review";
 
   return (
     <Card>
@@ -209,8 +275,8 @@ export default function CapturePage() {
         <CardTitle>New Case</CardTitle>
         <CardDescription>
           Fill in patient details, pick the scan type, and snap a photo of the
-          handwritten findings. Claude reads the photo, drafts the report,
-          and opens it directly in Word — edit and print from there.
+          handwritten findings. Claude reads the photo and drafts the report —
+          you review it next.
         </CardDescription>
       </CardHeader>
       <CardContent>

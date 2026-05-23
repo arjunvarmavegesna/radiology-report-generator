@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { FileText, RotateCw } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -8,7 +9,7 @@ import { getApprovedCases } from "@/lib/cases";
 import { scanTypeLabel } from "@/lib/scan-types";
 import { formatTimestamp } from "@/lib/format";
 import { openInWord } from "@/lib/office-url";
-import type { CaseDoc, ReportJSON } from "@/lib/types";
+import type { CaseDoc } from "@/lib/types";
 import {
   Card,
   CardContent,
@@ -27,6 +28,7 @@ import {
 } from "@/components/ui/table";
 
 export default function PrintQueuePage() {
+  const router = useRouter();
   const { user } = useAuth();
   const [cases, setCases] = useState<CaseDoc[]>([]);
   const [loading, setLoading] = useState(true);
@@ -90,50 +92,27 @@ export default function PrintQueuePage() {
     }
   }
 
-  /** Re-run AI on the case's stored photos, re-render the .docx with the new
-   *  draft, then open it in Word. The old approved version stays in place
-   *  until the new export succeeds — if anything fails, the queue entry is
-   *  unchanged and the user can retry. */
+  /** Re-run AI on the case's stored photos. /api/generate resets the case
+   *  status to pending_review and clears finalReport, so the user lands back
+   *  on /review/[id] to preview the new draft and re-approve. */
   async function handleRegenerate(c: CaseDoc) {
     if (!user || !c.id) return;
     setBusyId(c.id);
     setBusyAction("regen");
     try {
       const token = await user.getIdToken();
-      const genResp = await fetch(`/api/generate/${c.id}`, {
+      const resp = await fetch(`/api/generate/${c.id}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
-      const genData = (await genResp.json()) as {
-        report?: ReportJSON;
-        error?: string;
-      };
-      if (!genResp.ok || !genData.report) {
-        throw new Error(
-          genData.error ?? `Regenerate failed (${genResp.status})`,
-        );
+      if (!resp.ok) {
+        const body = (await resp.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(body.error ?? `Regenerate failed (${resp.status})`);
       }
-
-      const expResp = await fetch(`/api/export/${c.id}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ report: genData.report }),
-      });
-      const expData = (await expResp.json()) as {
-        downloadUrl?: string;
-        error?: string;
-      };
-      if (!expResp.ok || !expData.downloadUrl) {
-        throw new Error(
-          expData.error ?? `Word render failed (${expResp.status})`,
-        );
-      }
-      openInWord(expData.downloadUrl);
-      toast.success("New report ready — opening in Word.");
-      await load();
+      toast.success("New draft ready — opening for review.");
+      router.push(`/review/${c.id}`);
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Failed to regenerate.",
