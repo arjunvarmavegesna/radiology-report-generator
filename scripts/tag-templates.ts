@@ -430,12 +430,19 @@ function buildBodyXml(cfg: TemplateConfig): string {
     parts.push(pNormal(cfg.methodology));
     parts.push(pEmpty());
   }
-  // Sections multi-paragraph loop (paragraphLoop opens/closes on their own paras).
+  // Sections loop: one paragraph per section, with the `label` inlined before
+  // a colon when present and omitted when empty. Docxtemplater's `{#label}...
+  // {/label}` is a truthy-section — it renders the inner fragment iff the
+  // string is non-empty, so:
+  //   label="Right lobe of thyroid", body="2.6 x 1.2 x 1.6 cm"
+  //     → "Right lobe of thyroid  :  2.6 x 1.2 x 1.6 cm"  (single paragraph)
+  //   label="", body="Both lobes appear normal..."
+  //     → "Both lobes appear normal..."                    (single paragraph, no leading colon or blank)
+  // This matches the reference-corpus style and removes the previous two-line
+  // (label-then-body) layout plus the leading blank line for paragraph sections.
   parts.push(
     pNormal("{#sections}"),
-    pBold("{label}"),
-    pNormal("{body}"),
-    pEmpty(),
+    pNormal("{#label}{label}  :  {/label}{body}"),
     pNormal("{/sections}"),
   );
   // Impression heading + one paragraph per item.
