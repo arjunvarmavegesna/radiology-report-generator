@@ -10,6 +10,10 @@ runConfig:
   concurrency: 80
   cpu: 1
   memoryMiB: 512
+  # Default is 60s. Opus 4.7 with adaptive thinking + vision on a complex
+  # handwritten page can run 30-90s; 180s gives headroom without letting
+  # a wedged request tie up the instance forever.
+  timeoutSeconds: 180
 
 env:
   # Public Firebase client config. Safe to commit — NEXT_PUBLIC_* is inlined into
