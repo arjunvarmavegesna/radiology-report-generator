@@ -27,7 +27,8 @@ import { useAuth } from "@/lib/auth-context";
 import { createCase } from "@/lib/cases";
 import { SCAN_TYPES } from "@/lib/scan-types";
 import { todayInputDate, inputDateToDDMMYYYY } from "@/lib/format";
-import type { Gender } from "@/lib/types";
+import { openInWord } from "@/lib/office-url";
+import type { Gender, ReportJSON } from "@/lib/types";
 
 const MAX_PHOTOS = 3;
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -46,9 +47,9 @@ export default function CapturePage() {
   const [scanType, setScanType] = useState("");
   const [radiologistNotes, setRadiologistNotes] = useState("");
   const [photos, setPhotos] = useState<File[]>([]);
-  const [phase, setPhase] = useState<"idle" | "uploading" | "generating">(
-    "idle",
-  );
+  const [phase, setPhase] = useState<
+    "idle" | "uploading" | "generating" | "rendering"
+  >("idle");
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -131,30 +132,62 @@ export default function CapturePage() {
       return;
     }
 
-    setPhase("generating");
+    // Two-step: AI generates → server renders the .docx → open in Word.
+    let report: ReportJSON;
     try {
+      setPhase("generating");
       const token = await user.getIdToken();
-      const resp = await fetch(`/api/generate/${caseId}`, {
+      const genResp = await fetch(`/api/generate/${caseId}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!resp.ok) {
-        const body = (await resp.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        throw new Error(body.error ?? `Generation failed (${resp.status})`);
+      const genData = (await genResp.json()) as {
+        report?: ReportJSON;
+        error?: string;
+      };
+      if (!genResp.ok || !genData.report) {
+        throw new Error(
+          genData.error ?? `AI generation failed (${genResp.status})`,
+        );
       }
-      toast.success("Draft ready — opening for review.");
-      router.push(`/review/${caseId}`);
+      report = genData.report;
     } catch (err) {
-      // Case exists in Firestore even if AI failed. Send the user to /review
-      // anyway so they can retry generation or write the report manually.
       toast.error(
-        err instanceof Error
-          ? err.message
-          : "AI generation failed — opening case to retry.",
+        err instanceof Error ? err.message : "AI generation failed.",
       );
-      router.push(`/review/${caseId}`);
+      router.push("/queue");
+      setPhase("idle");
+      return;
+    }
+
+    try {
+      setPhase("rendering");
+      const token = await user.getIdToken();
+      const expResp = await fetch(`/api/export/${caseId}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ report }),
+      });
+      const expData = (await expResp.json()) as {
+        downloadUrl?: string;
+        error?: string;
+      };
+      if (!expResp.ok || !expData.downloadUrl) {
+        throw new Error(
+          expData.error ?? `Word render failed (${expResp.status})`,
+        );
+      }
+      openInWord(expData.downloadUrl);
+      toast.success("Report ready — opening in Word.");
+      router.push("/queue");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Word render failed.",
+      );
+      router.push("/queue");
     } finally {
       setPhase("idle");
     }
@@ -166,7 +199,9 @@ export default function CapturePage() {
       ? "Uploading photos…"
       : phase === "generating"
         ? "AI drafting report…"
-        : "Capture & Generate Report";
+        : phase === "rendering"
+          ? "Rendering Word document…"
+          : "Generate Report";
 
   return (
     <Card>
@@ -174,8 +209,8 @@ export default function CapturePage() {
         <CardTitle>New Case</CardTitle>
         <CardDescription>
           Fill in patient details, pick the scan type, and snap a photo of the
-          handwritten findings. Claude reads the photo and drafts the report —
-          you review it next.
+          handwritten findings. Claude reads the photo, drafts the report,
+          and opens it directly in Word — edit and print from there.
         </CardDescription>
       </CardHeader>
       <CardContent>

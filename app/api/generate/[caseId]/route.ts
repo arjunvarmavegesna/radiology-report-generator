@@ -65,9 +65,8 @@ export async function POST(
       { status: 401 },
     );
   }
-  let decoded;
   try {
-    decoded = await adminAuth().verifyIdToken(idToken);
+    await adminAuth().verifyIdToken(idToken);
   } catch {
     return NextResponse.json({ error: "Invalid token" }, { status: 401 });
   }
@@ -97,35 +96,20 @@ export async function POST(
     );
   }
 
-  // --- Persist draft + park the case in the Review list ---
-  // Single-role workflow: any generate call lands the case back in /review
-  // with the fresh AI draft. From `pending_typing` (initial Capture flow):
-  // advance to `pending_review`. From `approved` (Regenerate from queue):
-  // un-approve and clear the final-report bookkeeping so the user can edit
-  // and re-approve. The stored docx in Storage is left in place until the
-  // next /api/export overwrites it — no orphaned files in steady state.
+  // --- Persist draft ---
+  // No status mutation here. The client is expected to call /api/export
+  // immediately after generate to render the .docx and mark the case approved.
+  // For Regenerate, the existing finalReport stays in place until the new
+  // export succeeds — if export fails, the user still has the prior approved
+  // version intact.
   try {
-    const updates: Record<string, unknown> = {
+    await caseRef.update({
       draftReport: result.report,
-      editedReport: null,
       updatedAt: FieldValue.serverTimestamp(),
-    };
-    if (c.status === "pending_typing") {
-      updates.status = "pending_review";
-      updates.typistId = decoded.uid;
-      updates.typistSubmittedAt = FieldValue.serverTimestamp();
-    } else if (c.status === "approved") {
-      updates.status = "pending_review";
-      updates.finalReport = null;
-      updates.finalDocxPath = null;
-      updates.reviewerId = null;
-      updates.reviewerApprovedAt = null;
-      updates.typistSubmittedAt = FieldValue.serverTimestamp();
-    }
-    await caseRef.update(updates);
+    });
   } catch (err) {
     // Generation succeeded; persistence is best-effort. Return the report so
-    // the client can still work with it; a subsequent Save will retry the write.
+    // the client can still call /api/export with it.
     console.error("Persist draftReport failed:", err);
   }
 

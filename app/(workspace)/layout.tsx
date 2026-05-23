@@ -3,7 +3,6 @@ import { AppHeader } from "@/components/app-header";
 
 const NAV_LINKS = [
   { href: "/capture", label: "Capture" },
-  { href: "/review", label: "Review" },
   { href: "/queue", label: "Print Queue" },
 ];
 
