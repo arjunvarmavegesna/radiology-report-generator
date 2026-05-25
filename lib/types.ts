@@ -73,6 +73,11 @@ export interface CaseDoc {
 
   finalDocxPath: string | null;
 
+  /** Set by the Print Queue when print staff mark an approved case as
+   *  printed. Additive — the case stays `approved`; this just flips the
+   *  Ready → Printed chip and feeds the queue filter. */
+  printedAt?: Timestamp | null;
+
   createdAt: Timestamp | null;
   updatedAt: Timestamp | null;
 }

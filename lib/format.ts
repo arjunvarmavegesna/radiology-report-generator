@@ -33,18 +33,26 @@ export function formatTimestamp(ts: Timestamp | null | undefined): string {
   }
 }
 
+/** Clinic status-chip palette (from the Scanning.html reference). */
+export const CHIP = {
+  amber: "bg-[#FEF3C7] text-[#7C3E0B] border-[#FCD34D] hover:bg-[#FEF3C7]",
+  green: "bg-[#D1FAE5] text-[#155E3A] border-[#6EE7B7] hover:bg-[#D1FAE5]",
+  gray: "bg-[#EDF0F4] text-[#48516A] border-[#E0E4EC] hover:bg-[#EDF0F4]",
+  blue: "bg-[#E8F2FA] text-[#1B5E8C] border-[#9CC3DE] hover:bg-[#E8F2FA]",
+} as const;
+
 /** Badge label + tailwind classes for each case status. */
 export const STATUS_META: Record<CaseStatus, { label: string; className: string }> = {
   pending_typing: {
-    label: "Pending typing",
-    className: "bg-amber-100 text-amber-800 hover:bg-amber-100",
+    label: "Drafting",
+    className: CHIP.gray,
   },
   pending_review: {
-    label: "Pending review",
-    className: "bg-blue-100 text-blue-800 hover:bg-blue-100",
+    label: "Pending Review",
+    className: CHIP.amber,
   },
   approved: {
     label: "Approved",
-    className: "bg-green-100 text-green-800 hover:bg-green-100",
+    className: CHIP.green,
   },
 };

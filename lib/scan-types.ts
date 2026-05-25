@@ -40,3 +40,8 @@ export const SCAN_TYPE_LABELS: Record<string, string> = Object.fromEntries(
 export function scanTypeLabel(value: string): string {
   return SCAN_TYPE_LABELS[value] ?? value;
 }
+
+/** OB scans carry the mandatory PC & PNDT Act compliance statement. */
+export function isObstetricScan(value: string): boolean {
+  return SCAN_TYPES.find((s) => s.value === value)?.isObstetric ?? false;
+}

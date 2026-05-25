@@ -195,6 +195,16 @@ export async function saveReviewerDraft(
   });
 }
 
+/** Print staff: mark an approved case as printed. Additive — does not change
+ *  status (the case stays `approved`); just stamps `printedAt` so the Print
+ *  Queue can show a Printed chip and filter on it. */
+export async function markPrinted(caseId: string): Promise<void> {
+  await updateDoc(doc(db, CASES, caseId), {
+    printedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
 /** Reviewer: final approval. DOCX export will follow in the next milestone. */
 export async function approveCase(
   caseId: string,

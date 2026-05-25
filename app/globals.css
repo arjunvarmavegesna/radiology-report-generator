@@ -4,26 +4,32 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Font stacks — DM Sans / DM Mono loaded via <link> in app/layout.tsx,
+       with system fallbacks so an offline build degrades gracefully. */
+    --font-sans: "DM Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: "DM Mono", ui-monospace, "SFMono-Regular", monospace;
+
+    /* Clinic palette (from the Scanning.html reference), HSL form. */
+    --background: 213 25% 95%; /* #EEF1F5 page */
+    --foreground: 225 19% 13%; /* #1A1D26 text */
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 225 19% 13%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-    --radius: 0.5rem;
+    --popover-foreground: 225 19% 13%;
+    --primary: 204 68% 33%; /* #1B5E8C clinical blue */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 207 58% 95%; /* #E8F2FA light blue */
+    --secondary-foreground: 204 68% 33%;
+    --muted: 214 24% 97%; /* #F7F9FB */
+    --muted-foreground: 224 19% 35%; /* #48516A */
+    --accent: 207 58% 95%;
+    --accent-foreground: 204 68% 33%;
+    --destructive: 0 63% 31%; /* #7F1D1D */
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 24% 90%; /* #E0E4EC */
+    --input: 220 24% 90%;
+    --ring: 206 64% 43%; /* #2878B5 */
+    --radius: 0.625rem;
   }
 
   .dark {

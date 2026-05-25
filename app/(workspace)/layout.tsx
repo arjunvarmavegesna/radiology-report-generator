@@ -1,12 +1,6 @@
 import { AuthGuard } from "@/components/role-guard";
 import { AppHeader } from "@/components/app-header";
 
-const NAV_LINKS = [
-  { href: "/capture", label: "Capture" },
-  { href: "/review", label: "Review" },
-  { href: "/queue", label: "Print Queue" },
-];
-
 export default function WorkspaceLayout({
   children,
 }: {
@@ -14,8 +8,12 @@ export default function WorkspaceLayout({
 }) {
   return (
     <AuthGuard>
-      <AppHeader links={NAV_LINKS} />
-      <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
+      <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <AppHeader />
+        {/* Each page owns its own scroll: Capture/Queue scroll a centered
+            column; Review fills the height with two independent panes. */}
+        <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
+      </div>
     </AuthGuard>
   );
 }

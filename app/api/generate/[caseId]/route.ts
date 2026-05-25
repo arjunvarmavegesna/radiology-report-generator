@@ -97,11 +97,14 @@ export async function POST(
     );
   }
 
-  // --- Persist draft + park the case in /review ---
-  // The flow is: Capture → AI generates → status advances to pending_review →
-  // /review/[id] shows the draft for the radiologist to review → Approve
-  // renders the .docx via /api/export and marks the case approved.
-  //   - pending_typing (new case)  → advance to pending_review
+  // --- Persist draft ---
+  // The flow is: Capture → AI generates the draft → the typist edits it on the
+  // Capture screen and explicitly Submits (submitToReviewer → pending_review) →
+  // /review shows it for the radiologist → Approve renders the .docx via
+  // /api/export and marks the case approved.
+  //   - pending_typing (new case / regenerate on Capture) → STAY pending_typing,
+  //     just store the draft; the case is not surfaced in the review queue
+  //     until the typist submits.
   //   - approved (regenerate from queue) → reset to pending_review, clear
   //     finalReport + finalDocxPath so the user re-approves a fresh draft
   //   - pending_review (regenerate from review) → keep status, just refresh draft
@@ -112,9 +115,8 @@ export async function POST(
       updatedAt: FieldValue.serverTimestamp(),
     };
     if (c.status === "pending_typing") {
-      updates.status = "pending_review";
+      // Record who drafted it, but do NOT advance the status — Submit does that.
       updates.typistId = decoded.uid;
-      updates.typistSubmittedAt = FieldValue.serverTimestamp();
     } else if (c.status === "approved") {
       updates.status = "pending_review";
       updates.finalReport = null;
