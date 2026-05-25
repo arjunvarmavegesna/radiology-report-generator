@@ -8,8 +8,12 @@
  * from server code (it touches `document` / `canvas`).
  */
 
-const MAX_DIM = 2000; // px on the longest edge — plenty to read handwriting
-const JPEG_QUALITY = 0.82;
+// Claude's vision API downsamples images to ~1568px on the long edge before it
+// ever reads them, so uploading anything larger costs mobile-upload time for
+// zero gain in OCR accuracy. 1600px @ 0.75 keeps handwriting legible while
+// landing most phone photos under ~600 KB.
+const MAX_DIM = 1600;
+const JPEG_QUALITY = 0.75;
 
 /**
  * Downscale + re-encode an image File to JPEG. Returns the original File

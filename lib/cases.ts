@@ -27,17 +27,17 @@ async function uploadNotesImages(
   caseId: string,
   files: File[],
 ): Promise<string[]> {
-  const paths: string[] = [];
-  for (let i = 0; i < files.length; i++) {
-    const f = files[i];
-    const filename = safeName(f.name, `photo-${i}.jpg`);
-    const path = `cases/${caseId}/notes/${i}-${filename}`;
-    await uploadBytes(storageRef(storage, path), f, {
-      contentType: f.type || "image/jpeg",
-    });
-    paths.push(path);
-  }
-  return paths;
+  // Upload all photos concurrently — on a phone uplink, serial uploads are the
+  // main "uploading…" wait. Promise.all preserves order so paths line up.
+  return Promise.all(
+    files.map((f, i) => {
+      const filename = safeName(f.name, `photo-${i}.jpg`);
+      const path = `cases/${caseId}/notes/${i}-${filename}`;
+      return uploadBytes(storageRef(storage, path), f, {
+        contentType: f.type || "image/jpeg",
+      }).then(() => path);
+    }),
+  );
 }
 
 function tsMillis(t: Timestamp | null): number {
