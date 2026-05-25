@@ -1,5 +1,6 @@
 import {
   addDoc,
+  arrayUnion,
   collection,
   doc,
   getDoc,
@@ -12,7 +13,7 @@ import {
 } from "firebase/firestore";
 import { ref as storageRef, uploadBytes } from "firebase/storage";
 import { db, storage } from "./firebase";
-import type { CaseDoc, NewCaseInput, ReportJSON } from "./types";
+import type { CaseComment, CaseDoc, NewCaseInput, ReportJSON } from "./types";
 
 const CASES = "cases";
 
@@ -62,12 +63,15 @@ export async function createCase(
     dateOfExam: input.dateOfExam,
     refDoctor: input.refDoctor.trim(),
     scanType: input.scanType,
+    speciality: input.speciality?.trim() ?? "",
+    reportingRadiologist: input.reportingRadiologist?.trim() ?? "",
 
     radiologistId,
     radiologistNotes: input.radiologistNotes.trim(),
     notesImagePaths: [],
 
     status: "pending_typing",
+    comments: [],
 
     draftReport: null,
     editedReport: null,
@@ -135,6 +139,17 @@ export async function getReviewQueue(): Promise<CaseDoc[]> {
     );
 }
 
+/** Typist worklist: cases the radiologist sent back for correction, oldest
+ *  first so the typist clears the backlog FIFO. */
+export async function getSentBackQueue(): Promise<CaseDoc[]> {
+  const snap = await getDocs(
+    query(collection(db, CASES), where("status", "==", "sent_back")),
+  );
+  return snap.docs
+    .map((d) => mapCase(d.id, d.data()))
+    .sort((a, b) => tsMillis(a.updatedAt) - tsMillis(b.updatedAt));
+}
+
 /** Print queue: approved cases ready to download. Newest first so the most
  *  recently approved case is at the top. */
 export async function getApprovedCases(): Promise<CaseDoc[]> {
@@ -190,6 +205,32 @@ export async function saveReviewerDraft(
 ): Promise<void> {
   await updateDoc(doc(db, CASES, caseId), {
     finalReport: report,
+    reviewerId,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Append a comment to a case's review thread (no status change). */
+export async function addComment(
+  caseId: string,
+  comment: CaseComment,
+): Promise<void> {
+  await updateDoc(doc(db, CASES, caseId), {
+    comments: arrayUnion(comment),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Reviewer: send a case back to the typist for correction, with a comment.
+ *  Moves it out of the review queue into the typist's sent-back worklist. */
+export async function sendBackToTypist(
+  caseId: string,
+  comment: CaseComment,
+  reviewerId: string,
+): Promise<void> {
+  await updateDoc(doc(db, CASES, caseId), {
+    status: "sent_back",
+    comments: arrayUnion(comment),
     reviewerId,
     updatedAt: serverTimestamp(),
   });

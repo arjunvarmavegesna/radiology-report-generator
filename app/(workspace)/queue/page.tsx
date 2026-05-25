@@ -234,7 +234,7 @@ export default function PrintQueuePage() {
         {preview && (
           <>
             <div className="mb-3.5 text-sm font-semibold">Print Preview</div>
-            <div className="font-mono text-xs">
+            <div className="print-area font-mono text-xs">
               <div className="mb-3 border-b-2 border-primary pb-2.5">
                 <h2 className="font-sans text-sm font-bold text-primary">
                   RADIOLOGY REPORTS
@@ -309,6 +309,14 @@ export default function PrintQueuePage() {
             <div className="mt-4 flex justify-end gap-2 border-t border-border pt-3">
               <Button variant="outline" onClick={() => setPreview(null)}>
                 Close
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => window.print()}
+                disabled={busyId === preview.id}
+              >
+                <Printer className="mr-1.5 h-4 w-4" />
+                Print
               </Button>
               {!preview.printedAt && (
                 <Button

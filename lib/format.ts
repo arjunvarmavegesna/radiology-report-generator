@@ -39,6 +39,7 @@ export const CHIP = {
   green: "bg-[#D1FAE5] text-[#155E3A] border-[#6EE7B7] hover:bg-[#D1FAE5]",
   gray: "bg-[#EDF0F4] text-[#48516A] border-[#E0E4EC] hover:bg-[#EDF0F4]",
   blue: "bg-[#E8F2FA] text-[#1B5E8C] border-[#9CC3DE] hover:bg-[#E8F2FA]",
+  red: "bg-[#FEE2E2] text-[#7F1D1D] border-[#FCA5A5] hover:bg-[#FEE2E2]",
 } as const;
 
 /** Badge label + tailwind classes for each case status. */
@@ -50,6 +51,10 @@ export const STATUS_META: Record<CaseStatus, { label: string; className: string 
   pending_review: {
     label: "Pending Review",
     className: CHIP.amber,
+  },
+  sent_back: {
+    label: "Sent back",
+    className: CHIP.red,
   },
   approved: {
     label: "Approved",

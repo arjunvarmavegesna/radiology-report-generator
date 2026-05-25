@@ -198,5 +198,18 @@ export async function POST(
     updatedAt: FieldValue.serverTimestamp(),
   });
 
+  // --- Record the approved report as a gold-standard example for AI learning
+  //     (best-effort; never blocks the approval). ---
+  try {
+    await adminDb().collection("learning").add({
+      kind: "approval",
+      scanType,
+      text: flattenReportBody(report).join("\n").slice(0, 4000),
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  } catch (err) {
+    console.warn("Failed to record approval for learning:", err);
+  }
+
   return NextResponse.json({ downloadUrl, storagePath });
 }

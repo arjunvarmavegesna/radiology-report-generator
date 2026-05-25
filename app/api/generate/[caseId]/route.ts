@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminDb, adminStorage } from "@/lib/firebase-admin";
 import { generateReport, type GenerationImage } from "@/lib/ai";
+import { getLearningContext } from "@/lib/learning-server";
 import type { CaseDoc } from "@/lib/types";
 
 /** Pull every image at case.notesImagePaths from Storage and base64-encode it
@@ -86,9 +87,10 @@ export async function POST(
 
   // --- Generate ---
   const images = await loadCaseImages(c.notesImagePaths);
+  const learningContext = await getLearningContext(c.scanType);
   let result;
   try {
-    result = await generateReport(c, images);
+    result = await generateReport(c, images, learningContext);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Generation failed";
     return NextResponse.json(

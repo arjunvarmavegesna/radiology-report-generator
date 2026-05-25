@@ -4,7 +4,11 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getReviewQueue, getApprovedCases } from "@/lib/cases";
+import {
+  getReviewQueue,
+  getApprovedCases,
+  getSentBackQueue,
+} from "@/lib/cases";
 import {
   PERSONAS,
   loadPersona,
@@ -15,7 +19,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const TABS = [
-  { href: "/capture", label: "Capture & Generate", badge: null },
+  { href: "/capture", label: "Capture & Generate", badge: "sentback" },
   { href: "/review", label: "Radiologist Review", badge: "review" },
   { href: "/queue", label: "Print Queue", badge: "ready" },
 ] as const;
@@ -31,6 +35,7 @@ export function AppHeader() {
   const [persona, setPersona] = useState<Persona>("typist");
   const [reviewCount, setReviewCount] = useState(0);
   const [readyCount, setReadyCount] = useState(0);
+  const [sentBackCount, setSentBackCount] = useState(0);
 
   useEffect(() => {
     setPersona(loadPersona());
@@ -42,13 +47,15 @@ export function AppHeader() {
     let active = true;
     (async () => {
       try {
-        const [rev, app] = await Promise.all([
+        const [rev, app, sb] = await Promise.all([
           getReviewQueue(),
           getApprovedCases(),
+          getSentBackQueue(),
         ]);
         if (!active) return;
         setReviewCount(rev.length);
         setReadyCount(app.filter((c) => !c.printedAt).length);
+        setSentBackCount(sb.length);
       } catch {
         /* badge counts are best-effort */
       }
@@ -123,7 +130,9 @@ export function AppHeader() {
               ? reviewCount
               : t.badge === "ready"
                 ? readyCount
-                : 0;
+                : t.badge === "sentback"
+                  ? sentBackCount
+                  : 0;
           return (
             <Link
               key={t.href}
@@ -140,7 +149,11 @@ export function AppHeader() {
                 <span
                   className={cn(
                     "ml-1.5 rounded-[10px] px-1.5 py-px text-[10px] font-bold text-white",
-                    t.badge === "review" ? "bg-[#D97706]" : "bg-primary",
+                    t.badge === "review"
+                      ? "bg-[#D97706]"
+                      : t.badge === "sentback"
+                        ? "bg-[#7F1D1D]"
+                        : "bg-primary",
                   )}
                 >
                   {count}

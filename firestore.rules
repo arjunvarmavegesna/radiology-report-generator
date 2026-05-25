@@ -24,6 +24,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // AI Learning store: corrections + approved examples fed back into prompts.
+    // Any signed-in user may add entries and clear them; entries are immutable
+    // once written (no updates). Server reads use the Admin SDK and bypass this.
+    match /learning/{entryId} {
+      allow read, create, delete: if isSignedIn();
+      allow update: if false;
+    }
+
     match /cases/{caseId} {
       // Creation: any signed-in user. Require the doc to claim them as
       // the radiologist (so cases are attributed) and start at the

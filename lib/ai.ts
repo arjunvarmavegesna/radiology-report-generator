@@ -7,7 +7,10 @@
  * based on env vars. Gemini was removed when the clinic standardized on
  * Opus 4.7 for accuracy on handwritten notes + vision input.
  */
-import { generateReport as generateWithClaude } from "./anthropic";
+import {
+  generateReport as generateWithClaude,
+  reviseReport as reviseWithClaude,
+} from "./anthropic";
 import type { GenerationImage, GenerationUsage } from "./ai-shared";
 import type { CaseDoc, ReportJSON } from "./types";
 
@@ -23,7 +26,18 @@ export interface GenerationResult {
 export async function generateReport(
   c: CaseDoc,
   images: GenerationImage[] = [],
+  learningContext = "",
 ): Promise<GenerationResult> {
-  const result = await generateWithClaude(c, images);
+  const result = await generateWithClaude(c, images, learningContext);
+  return { ...result, provider: "claude" };
+}
+
+export async function reviseReport(
+  c: CaseDoc,
+  currentReportText: string,
+  comment: string,
+  learningContext = "",
+): Promise<GenerationResult> {
+  const result = await reviseWithClaude(c, currentReportText, comment, learningContext);
   return { ...result, provider: "claude" };
 }

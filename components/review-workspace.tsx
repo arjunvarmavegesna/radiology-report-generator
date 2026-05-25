@@ -1,10 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Timestamp } from "firebase/firestore";
 import { toast } from "sonner";
 import { FileText } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { getReviewQueue, getCase, saveReviewerDraft } from "@/lib/cases";
+import {
+  getReviewQueue,
+  getCase,
+  saveReviewerDraft,
+  sendBackToTypist,
+} from "@/lib/cases";
 import { scanTypeLabel, isObstetricScan } from "@/lib/scan-types";
 import { formatTimestamp, STATUS_META } from "@/lib/format";
 import { openInWord } from "@/lib/office-url";
@@ -14,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { DictateButton } from "@/components/dictate-button";
 import { cn } from "@/lib/utils";
 
 /** Two-pane radiologist review: pending queue on the left, an editable report
@@ -35,7 +42,10 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
   const [scanTitle, setScanTitle] = useState("");
   const [bodyText, setBodyText] = useState("");
   const [complianceText, setComplianceText] = useState<string | null>(null);
-  const [busy, setBusy] = useState<null | "save" | "approve" | "generate">(null);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState<
+    null | "save" | "approve" | "generate" | "revise" | "sendback"
+  >(null);
 
   const loadQueue = useCallback(async () => {
     setQueueLoading(true);
@@ -67,6 +77,7 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
         const data = await getCase(selectedId);
         if (!active) return;
         setC(data);
+        setComment("");
         if (data) {
           const src =
             data.finalReport ??
@@ -132,6 +143,78 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
       toast.success("Edits saved.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRevise() {
+    if (!user || !c?.id) return;
+    const note = comment.trim();
+    if (!note) {
+      toast.error("Add a correction note first.");
+      return;
+    }
+    const report = makeReport();
+    if (!report) return;
+    setBusy("revise");
+    try {
+      const token = await user.getIdToken();
+      const resp = await fetch(`/api/revise/${c.id}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ report, comment: note }),
+      });
+      const data = (await resp.json().catch(() => ({}))) as {
+        report?: ReportJSON;
+        error?: string;
+      };
+      if (!resp.ok || !data.report) {
+        throw new Error(data.error || `Revision failed (${resp.status})`);
+      }
+      setScanTitle(data.report.scanTitle ?? "");
+      setBodyText(reportToText(data.report));
+      setComplianceText(data.report.complianceText ?? null);
+      setComment("");
+      // Refresh the case so the new comment shows in the history (the revise
+      // route appended it server-side).
+      setC(await getCase(c.id));
+      toast.success("Report revised with your correction.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "AI revision failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleSendBack() {
+    if (!user || !c?.id) return;
+    const note = comment.trim();
+    if (!note) {
+      toast.error("Add a comment before sending back.");
+      return;
+    }
+    setBusy("sendback");
+    try {
+      await sendBackToTypist(
+        c.id,
+        {
+          text: note,
+          byRole: "radiologist",
+          byUid: user.uid,
+          at: Timestamp.now(),
+        },
+        user.uid,
+      );
+      toast.success("Sent back to the typist for correction.");
+      setSelectedId(null);
+      setC(null);
+      await loadQueue();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to send back.");
     } finally {
       setBusy(null);
     }
@@ -313,6 +396,25 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
               </div>
             )}
 
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="comment">Comments / Corrections</Label>
+                <DictateButton
+                  label="Voice Note"
+                  onAppend={(t) =>
+                    setComment((p) => (p ? `${p} ${t}` : t))
+                  }
+                />
+              </div>
+              <Textarea
+                id="comment"
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                rows={4}
+                placeholder="Type or dictate a correction. 'AI Revise' rewrites the draft from this note; 'Send Back' returns the case to the typist with it."
+              />
+            </div>
+
             <div className="flex flex-wrap justify-end gap-2 pt-1">
               <Button
                 variant="outline"
@@ -321,6 +423,22 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
                 disabled={busy !== null}
               >
                 {busy === "generate" ? "Regenerating…" : "Regenerate"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRevise}
+                disabled={busy !== null}
+              >
+                {busy === "revise" ? "Revising…" : "AI Revise with Comments"}
+              </Button>
+              <Button
+                variant="warning"
+                size="sm"
+                onClick={handleSendBack}
+                disabled={busy !== null}
+              >
+                {busy === "sendback" ? "Sending…" : "Send Back to Typist"}
               </Button>
               <Button
                 variant="outline"
@@ -339,6 +457,28 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
                   : "Approve & send to Print Queue"}
               </Button>
             </div>
+
+            {c.comments && c.comments.length > 0 && (
+              <div className="rounded-[10px] border border-border bg-card p-3">
+                <div className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[#8591A8]">
+                  Comment History
+                </div>
+                <div className="space-y-1.5">
+                  {c.comments.map((cm, i) => (
+                    <div
+                      key={i}
+                      className="rounded-[8px] bg-secondary p-2 text-[11px]"
+                    >
+                      <b className="capitalize">{cm.byRole}</b>{" "}
+                      <span className="text-[#8591A8]">
+                        {formatTimestamp(cm.at)}
+                      </span>
+                      <div className="whitespace-pre-wrap">{cm.text}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </section>

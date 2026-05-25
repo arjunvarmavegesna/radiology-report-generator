@@ -20,6 +20,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import {
   buildStaticBlock,
   buildVolatileBlock,
+  buildReviseBlock,
   reportJsonSchema,
   SYSTEM_PROMPT,
   type GenerationImage,
@@ -42,19 +43,25 @@ function normalizeMedia(mime: string): ClaudeImageMedia {
   }
 }
 
-export async function generateReport(
-  c: CaseDoc,
-  images: GenerationImage[] = [],
-): Promise<ProviderResult> {
+function requireApiKey(): string {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error(
       "ANTHROPIC_API_KEY is not set. Add it to .env.local for local dev, or to apphosting.yaml as a Secret Manager reference for production.",
     );
   }
+  return apiKey;
+}
+
+export async function generateReport(
+  c: CaseDoc,
+  images: GenerationImage[] = [],
+  learningContext = "",
+): Promise<ProviderResult> {
+  const apiKey = requireApiKey();
 
   const staticBlock = buildStaticBlock(c);
-  const volatileBlock = buildVolatileBlock(c, images.length > 0);
+  const volatileBlock = buildVolatileBlock(c, images.length > 0, learningContext);
 
   // Image blocks are interleaved BEFORE the volatile text so the model has
   // seen the photos by the time it reads the "ATTACHED PHOTOS: ..." pointer.
@@ -109,6 +116,63 @@ export async function generateReport(
       // minimum of `high` for intelligence-sensitive work. Medical report
       // drafting from photos of handwritten notes qualifies — accuracy
       // matters more than per-case cost.
+      effort: "high",
+    },
+  });
+
+  if (!response.parsed_output) {
+    throw new Error(
+      `Anthropic returned a non-parseable response (stop_reason=${response.stop_reason}).`,
+    );
+  }
+
+  return {
+    report: response.parsed_output as ReportJSON,
+    usage: {
+      inputTokens: response.usage.input_tokens,
+      cacheCreationInputTokens: response.usage.cache_creation_input_tokens ?? 0,
+      cacheReadInputTokens: response.usage.cache_read_input_tokens ?? 0,
+      outputTokens: response.usage.output_tokens,
+    },
+  };
+}
+
+/** Re-draft an existing report applying a radiologist's correction note.
+ *  Same call shape as generateReport (cached static block + structured output);
+ *  the volatile block carries the current report + the correction instead of
+ *  raw shorthand. No images — the revision works from the text report. */
+export async function reviseReport(
+  c: CaseDoc,
+  currentReportText: string,
+  comment: string,
+  learningContext = "",
+): Promise<ProviderResult> {
+  const apiKey = requireApiKey();
+
+  const staticBlock = buildStaticBlock(c);
+  const reviseBlock = buildReviseBlock(c, currentReportText, comment, learningContext);
+
+  const client = new Anthropic({ apiKey });
+  const response = await client.messages.parse({
+    model: "claude-opus-4-7",
+    max_tokens: 16000,
+    thinking: { type: "adaptive" },
+    system: SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: staticBlock,
+            cache_control: { type: "ephemeral" },
+          },
+          { type: "text", text: reviseBlock },
+        ],
+      },
+    ],
+    output_config: {
+      format: zodOutputFormat(reportJsonSchema),
       effort: "high",
     },
   });

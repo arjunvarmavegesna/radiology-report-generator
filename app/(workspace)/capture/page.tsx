@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Camera, X, ImagePlus } from "lucide-react";
+import { Camera, X, ImagePlus, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,18 +17,34 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Modal } from "@/components/ui/modal";
+import { DictateButton } from "@/components/dictate-button";
 import { useAuth } from "@/lib/auth-context";
-import { createCase, submitToReviewer } from "@/lib/cases";
+import { createCase, submitToReviewer, getSentBackQueue } from "@/lib/cases";
 import { scanTypeLabel } from "@/lib/scan-types";
-import { todayInputDate, inputDateToDDMMYYYY } from "@/lib/format";
-import { reportToText, textToBody } from "@/lib/report-text";
-import type { Gender, ReportJSON } from "@/lib/types";
+import { todayInputDate, inputDateToDDMMYYYY, formatTimestamp } from "@/lib/format";
+import { reportToText, textToBody, emptyReport } from "@/lib/report-text";
+import {
+  recordCorrection,
+  getLearningStats,
+  listLearning,
+  clearLearning,
+  type LearningEntry,
+  type LearningStats,
+} from "@/lib/learning";
+import { loadPersona, type Persona } from "@/lib/persona";
+import type { CaseDoc, Gender, ReportJSON } from "@/lib/types";
 
 const MAX_PHOTOS = 3;
 const MAX_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_MIME = /^image\/(jpeg|jpg|png|webp|gif)$/i;
 
-/** The 21 canonical scan types, grouped for the dropdown (values unchanged). */
+const REPORTING_RADIOLOGISTS = [
+  "Dr. K. Valli Manasa, MD",
+  "Dr. Anitha Reddy, MD",
+  "Dr. Suresh Babu, MD",
+];
+
 const SCAN_GROUPS: { label: string; values: string[] }[] = [
   { label: "Abdomen / Pelvis", values: ["abdomen_male", "abdomen_female", "pelvis"] },
   { label: "Breast / Small Parts", values: ["breast", "soft_parts", "scrotum"] },
@@ -59,8 +75,6 @@ const SCAN_GROUPS: { label: string; values: string[] }[] = [
   },
 ];
 
-/** See note in the original capture page: persists text fields across the
- *  Android camera-intent reload. Photos stay ephemeral. */
 const DRAFT_KEY = "rrg.capture.draft.v1";
 
 interface DraftFields {
@@ -70,6 +84,8 @@ interface DraftFields {
   mrNumber: string;
   date: string;
   refDoctor: string;
+  speciality: string;
+  reportingRadiologist: string;
   scanType: string;
   radiologistNotes: string;
 }
@@ -87,11 +103,14 @@ export default function CapturePage() {
   const [mrNumber, setMrNumber] = useState("");
   const [date, setDate] = useState(todayInputDate());
   const [refDoctor, setRefDoctor] = useState("");
+  const [speciality, setSpeciality] = useState("");
+  const [reportingRadiologist, setReportingRadiologist] = useState(
+    REPORTING_RADIOLOGISTS[0],
+  );
   const [scanType, setScanType] = useState("");
   const [radiologistNotes, setRadiologistNotes] = useState("");
   const [photos, setPhotos] = useState<File[]>([]);
 
-  // Generation lifecycle.
   const [phase, setPhase] = useState<
     "idle" | "uploading" | "generating" | "submitting"
   >("idle");
@@ -100,36 +119,68 @@ export default function CapturePage() {
   const [draftText, setDraftText] = useState("");
   const [edited, setEdited] = useState(false);
 
-  const [hydrated, setHydrated] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Sent-back correction mode: when set, the page edits an existing case the
+  // radiologist returned, rather than capturing a new one.
+  const [loadedCase, setLoadedCase] = useState<CaseDoc | null>(null);
+  const [sentBack, setSentBack] = useState<CaseDoc[]>([]);
 
-  // Restore saved draft on mount (mobile camera-intent recovery).
+  // AI learning bar.
+  const [learnStats, setLearnStats] = useState<LearningStats>({
+    corrections: 0,
+    approvals: 0,
+  });
+  const [learnEntries, setLearnEntries] = useState<LearningEntry[] | null>(null);
+
+  const [persona, setPersona] = useState<Persona>("typist");
+  const [hydrated, setHydrated] = useState(false);
+
+  const busy = phase !== "idle";
+  const inputsLocked = busy || caseId !== null;
+
+  // Restore saved draft + load sidebars on mount.
   useEffect(() => {
-    if (typeof window === "undefined") {
-      setHydrated(true);
-      return;
-    }
-    try {
-      const raw = sessionStorage.getItem(DRAFT_KEY);
-      if (raw) {
-        const s = JSON.parse(raw) as Partial<DraftFields>;
-        if (s.patientName) setPatientName(s.patientName);
-        if (s.age) setAge(s.age);
-        if (s.gender) setGender(s.gender);
-        if (s.mrNumber) setMrNumber(s.mrNumber);
-        if (s.date) setDate(s.date);
-        if (s.refDoctor) setRefDoctor(s.refDoctor);
-        if (s.scanType) setScanType(s.scanType);
-        if (s.radiologistNotes) setRadiologistNotes(s.radiologistNotes);
+    setPersona(loadPersona());
+    if (typeof window !== "undefined") {
+      try {
+        const raw = sessionStorage.getItem(DRAFT_KEY);
+        if (raw) {
+          const s = JSON.parse(raw) as Partial<DraftFields>;
+          if (s.patientName) setPatientName(s.patientName);
+          if (s.age) setAge(s.age);
+          if (s.gender) setGender(s.gender);
+          if (s.mrNumber) setMrNumber(s.mrNumber);
+          if (s.date) setDate(s.date);
+          if (s.refDoctor) setRefDoctor(s.refDoctor);
+          if (s.speciality) setSpeciality(s.speciality);
+          if (s.reportingRadiologist)
+            setReportingRadiologist(s.reportingRadiologist);
+          if (s.scanType) setScanType(s.scanType);
+          if (s.radiologistNotes) setRadiologistNotes(s.radiologistNotes);
+        }
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* malformed JSON — ignore */
     }
     setHydrated(true);
+    void refreshSidebars();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function refreshSidebars() {
+    try {
+      setSentBack(await getSentBackQueue());
+    } catch {
+      /* ignore */
+    }
+    try {
+      setLearnStats(await getLearningStats());
+    } catch {
+      /* ignore */
+    }
+  }
+
   useEffect(() => {
-    if (!hydrated || typeof window === "undefined") return;
+    if (!hydrated || typeof window === "undefined" || loadedCase) return;
     try {
       const draft: DraftFields = {
         patientName,
@@ -138,21 +189,26 @@ export default function CapturePage() {
         mrNumber,
         date,
         refDoctor,
+        speciality,
+        reportingRadiologist,
         scanType,
         radiologistNotes,
       };
       sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
     } catch {
-      /* quota — non-fatal */
+      /* ignore */
     }
   }, [
     hydrated,
+    loadedCase,
     patientName,
     age,
     gender,
     mrNumber,
     date,
     refDoctor,
+    speciality,
+    reportingRadiologist,
     scanType,
     radiologistNotes,
   ]);
@@ -173,11 +229,6 @@ export default function CapturePage() {
     return () => urls.forEach((u) => URL.revokeObjectURL(u));
   }, [photos]);
 
-  const busy = phase !== "idle";
-  // Once a case exists the inputs are frozen (the case was created from them);
-  // the typist edits the report instead. Discard to start a fresh case.
-  const inputsLocked = busy || caseId !== null;
-
   function addFiles(incoming: FileList | null) {
     if (!incoming || incoming.length === 0) return;
     const next = [...photos];
@@ -197,7 +248,6 @@ export default function CapturePage() {
       next.push(f);
     }
     setPhotos(next);
-    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   function removePhoto(idx: number) {
@@ -218,7 +268,6 @@ export default function CapturePage() {
     return true;
   }
 
-  /** Create the case (first time) and run AI generation in place. */
   async function runGenerate() {
     if (!user) {
       toast.error("Not signed in.");
@@ -237,6 +286,8 @@ export default function CapturePage() {
             mrNumber,
             dateOfExam: inputDateToDDMMYYYY(date),
             refDoctor,
+            speciality,
+            reportingRadiologist,
             scanType,
             radiologistNotes,
             notesImages: photos,
@@ -279,8 +330,6 @@ export default function CapturePage() {
 
   function handleDiscard() {
     if (!window.confirm("Discard this generated report?")) return;
-    // The pending_typing case stays in Firestore but is never surfaced (the
-    // review queue only shows submitted cases), so this is safe.
     setDraftReport(null);
     setDraftText("");
     setEdited(false);
@@ -294,6 +343,8 @@ export default function CapturePage() {
     setMrNumber("");
     setDate(todayInputDate());
     setRefDoctor("");
+    setSpeciality("");
+    setReportingRadiologist(REPORTING_RADIOLOGISTS[0]);
     setScanType("");
     setRadiologistNotes("");
     setPhotos([]);
@@ -301,6 +352,7 @@ export default function CapturePage() {
     setDraftReport(null);
     setDraftText("");
     setEdited(false);
+    setLoadedCase(null);
     clearDraft();
   }
 
@@ -312,27 +364,54 @@ export default function CapturePage() {
     }
     setPhase("submitting");
     try {
+      const patientDetails = loadedCase
+        ? draftReport.patientDetails
+        : {
+            name: patientName,
+            age,
+            gender,
+            mrNumber,
+            date: inputDateToDDMMYYYY(date),
+            refDoctor,
+          };
       const report: ReportJSON = {
-        patientDetails: {
-          name: patientName,
-          age,
-          gender,
-          mrNumber,
-          date: inputDateToDDMMYYYY(date),
-          refDoctor,
-        },
+        patientDetails,
         scanTitle: draftReport.scanTitle,
         body: textToBody(draftText),
         complianceText: draftReport.complianceText,
       };
       await submitToReviewer(caseId, report, user.uid);
-      toast.success(`Report for ${patientName} submitted for radiologist review.`);
+      if (edited) {
+        const st = loadedCase?.scanType ?? scanType;
+        await recordCorrection({
+          scanType: st,
+          aiText: reportToText(draftReport),
+          correctedText: draftText,
+          comment: "Typist edited the draft before submission",
+          byRole: "typist",
+        });
+      }
+      toast.success(
+        `Report for ${patientDetails.name} submitted for radiologist review.`,
+      );
       resetAll();
+      await refreshSidebars();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to submit.");
     } finally {
       setPhase("idle");
     }
+  }
+
+  function openSentBack(c: CaseDoc) {
+    const src =
+      c.finalReport ?? c.editedReport ?? c.draftReport ?? emptyReport(c);
+    setLoadedCase(c);
+    setCaseId(c.id ?? null);
+    setDraftReport(src);
+    setDraftText(reportToText(src));
+    setEdited(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function loadDemo() {
@@ -341,6 +420,7 @@ export default function CapturePage() {
     setGender("Female");
     setMrNumber("26001924");
     setRefDoctor("Dr. Vikranth Chunduri");
+    setSpeciality("Gastroenterologist");
     setScanType("abdomen_female");
     setRadiologistNotes(
       "Liver 13.8cm. GB pld wall normal no calculi. Pancreas H and b normal. Spleen 9.2cm. RK 9.4x4.7cm normal. LK 9.9x5.1cm normal. UB adequately distended wall normal. Uterus anteverted 7x3.5x3cm EE 6mm normal. BL ovaries normal. No free fluid. OLPH Nil.",
@@ -348,212 +428,369 @@ export default function CapturePage() {
     toast.info("Demo patient loaded — click Generate Report.");
   }
 
+  async function openLearnDetail() {
+    setLearnEntries(await listLearning(20));
+  }
+
+  async function doClearLearning() {
+    if (!window.confirm("Clear all AI learning data? This cannot be undone.")) {
+      return;
+    }
+    try {
+      await clearLearning();
+      toast.info("AI learning data cleared.");
+      await refreshSidebars();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to clear.");
+    }
+  }
+
+  const learnTotal = learnStats.corrections + learnStats.approvals;
+  const radiologistPersona = persona === "radiologist";
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-[820px] space-y-3 p-4">
-        {/* Patient Information */}
-        <div className={CARD}>
-          <div className={SECTION_LABEL}>Patient Information</div>
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
-            <Field label="Patient Name" required>
-              <Input
-                value={patientName}
-                onChange={(e) => setPatientName(e.target.value)}
-                placeholder="e.g. G. Lakshmi Devi"
-                disabled={inputsLocked}
-              />
-            </Field>
-            <Field label="Age" required>
-              <Input
-                value={age}
-                onChange={(e) => setAge(e.target.value)}
-                placeholder="e.g. 42 Yrs"
-                disabled={inputsLocked}
-              />
-            </Field>
-            <Field label="Gender" required>
-              <RadioGroup
-                value={gender}
-                onValueChange={(v) => setGender(v as Gender)}
-                className="flex h-10 items-center gap-5"
-                disabled={inputsLocked}
-              >
-                {(["Female", "Male"] as Gender[]).map((g) => (
-                  <div key={g} className="flex items-center gap-1.5">
-                    <RadioGroupItem id={`gender-${g}`} value={g} />
-                    <Label htmlFor={`gender-${g}`}>{g}</Label>
-                  </div>
-                ))}
-              </RadioGroup>
-            </Field>
-            <Field label="MR Number" required>
-              <Input
-                value={mrNumber}
-                onChange={(e) => setMrNumber(e.target.value)}
-                placeholder="e.g. 26002411"
-                disabled={inputsLocked}
-              />
-            </Field>
-            <Field label="Referring Doctor">
-              <Input
-                value={refDoctor}
-                onChange={(e) => setRefDoctor(e.target.value)}
-                placeholder="e.g. Dr. Vikranth Chunduri"
-                disabled={inputsLocked}
-              />
-            </Field>
-            <Field label="Date of Examination" required>
-              <Input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                disabled={inputsLocked}
-              />
-            </Field>
-          </div>
-        </div>
-
-        {/* Scan Type */}
-        <div className={CARD}>
-          <div className={SECTION_LABEL}>
-            Scan Type <span className="text-[#7F1D1D]">*</span>
-          </div>
-          <Select
-            value={scanType}
-            onValueChange={setScanType}
-            disabled={inputsLocked}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="-- Select scan type --" />
-            </SelectTrigger>
-            <SelectContent>
-              {SCAN_GROUPS.map((g) => (
-                <SelectGroup key={g.label}>
-                  <SelectLabel>{g.label}</SelectLabel>
-                  {g.values.map((v) => (
-                    <SelectItem key={v} value={v}>
-                      {scanTypeLabel(v)}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Raw Data Form */}
-        <div className={CARD}>
-          <div className={SECTION_LABEL}>Raw Data Form</div>
-
-          <div className="flex flex-wrap items-start gap-3">
-            {previewUrls.map((url, i) => (
-              <div
-                key={url}
-                className="relative h-24 w-24 overflow-hidden rounded-md border border-input bg-muted"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={url}
-                  alt={`Notes photo ${i + 1}`}
-                  className="h-full w-full object-cover"
-                />
-                <button
-                  type="button"
-                  onClick={() => removePhoto(i)}
-                  disabled={inputsLocked}
-                  className="absolute right-1 top-1 rounded-full bg-background/80 p-0.5 text-foreground shadow hover:bg-background disabled:opacity-50"
-                  aria-label={`Remove photo ${i + 1}`}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+        {loadedCase ? (
+          /* ---------- Sent-back correction mode ---------- */
+          <div className={CARD}>
+            <div className="mb-2 flex items-center justify-between">
+              <div className={SECTION_LABEL + " mb-0"}>
+                Correcting sent-back report
               </div>
-            ))}
-
-            {photos.length < MAX_PHOTOS && (
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={inputsLocked}
-                className="flex h-24 w-24 flex-col items-center justify-center gap-1 rounded-md border-2 border-dashed border-[#C4CBDA] bg-muted/40 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
-                aria-label="Add a photo"
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={resetAll}
+                disabled={busy}
               >
-                <ImagePlus className="h-5 w-5" />
-                <span>Add photo</span>
-              </button>
+                Cancel
+              </Button>
+            </div>
+            <div className="text-[15px] font-semibold">
+              {loadedCase.patientName}
+            </div>
+            <div className="text-[11px] text-[#8591A8]">
+              {scanTypeLabel(loadedCase.scanType)} · {loadedCase.age} ·{" "}
+              {loadedCase.gender} · MR {loadedCase.mrNumber}
+            </div>
+            {loadedCase.comments && loadedCase.comments.length > 0 && (
+              <div className="mt-3 rounded-[10px] border border-[#FCA5A5] bg-[#FEE2E2] p-3">
+                <div className="mb-1 text-[10px] font-bold uppercase tracking-wide text-[#7F1D1D]">
+                  Radiologist&apos;s notes
+                </div>
+                {loadedCase.comments.map((cm, i) => (
+                  <p key={i} className="text-xs text-[#7F1D1D]">
+                    {cm.text}
+                  </p>
+                ))}
+              </div>
             )}
           </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif"
-            multiple
-            capture="environment"
-            className="hidden"
-            onChange={(e) => addFiles(e.target.files)}
-            disabled={inputsLocked}
-          />
-          <p className="mt-1.5 flex items-center gap-1 text-[11px] text-[#8591A8]">
-            <Camera className="h-3 w-3" />
-            On mobile this opens the camera — snap the handwritten raw-data form
-            (up to {MAX_PHOTOS}, ≤ 5 MB each).
-          </p>
+        ) : (
+          <>
+            {/* Radiologist Direct banner */}
+            {radiologistPersona && (
+              <div className="rounded-[14px] bg-gradient-to-br from-[#1B5E8C] to-[#2878B5] p-4 text-white shadow-sm">
+                <div className="text-[13px] font-semibold">
+                  Radiologist Direct Mode
+                </div>
+                <div className="text-[11px] opacity-90">
+                  Typist unavailable — dictate the findings yourself, generate
+                  the report, and submit it straight to your own Review queue.
+                </div>
+              </div>
+            )}
 
-          <div className="mt-3">
-            <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-[#8591A8]">
-              Or type raw readings manually
+            {/* Sent-back worklist */}
+            {sentBack.length > 0 && (
+              <div className={CARD}>
+                <div className={SECTION_LABEL}>
+                  Sent back for correction ({sentBack.length})
+                </div>
+                <div className="space-y-1.5">
+                  {sentBack.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => openSentBack(c)}
+                      className="flex w-full items-center justify-between rounded-[10px] border border-border bg-[#FFF7F7] px-3 py-2 text-left hover:border-ring"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-xs font-semibold">
+                          {c.patientName}
+                        </span>
+                        <span className="block truncate text-[11px] text-[#8591A8]">
+                          {scanTypeLabel(c.scanType)} · {formatTimestamp(c.updatedAt)}
+                        </span>
+                      </span>
+                      <span className="ml-2 shrink-0 rounded-full border border-[#FCA5A5] bg-[#FEE2E2] px-2 py-0.5 text-[10px] font-semibold text-[#7F1D1D]">
+                        Fix &amp; resubmit
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Patient Information */}
+            <div className={CARD}>
+              <div className={SECTION_LABEL}>Patient Information</div>
+              <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2.5">
+                <Field label="Patient Name" required>
+                  <Input
+                    value={patientName}
+                    onChange={(e) => setPatientName(e.target.value)}
+                    placeholder="e.g. G. Lakshmi Devi"
+                    disabled={inputsLocked}
+                  />
+                </Field>
+                <Field label="Age" required>
+                  <Input
+                    value={age}
+                    onChange={(e) => setAge(e.target.value)}
+                    placeholder="e.g. 42 Yrs"
+                    disabled={inputsLocked}
+                  />
+                </Field>
+                <Field label="Gender" required>
+                  <RadioGroup
+                    value={gender}
+                    onValueChange={(v) => setGender(v as Gender)}
+                    className="flex h-10 items-center gap-5"
+                    disabled={inputsLocked}
+                  >
+                    {(["Female", "Male"] as Gender[]).map((g) => (
+                      <div key={g} className="flex items-center gap-1.5">
+                        <RadioGroupItem id={`gender-${g}`} value={g} />
+                        <Label htmlFor={`gender-${g}`}>{g}</Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                </Field>
+                <Field label="MR Number" required>
+                  <Input
+                    value={mrNumber}
+                    onChange={(e) => setMrNumber(e.target.value)}
+                    placeholder="e.g. 26002411"
+                    disabled={inputsLocked}
+                  />
+                </Field>
+                <Field label="Referring Doctor">
+                  <Input
+                    value={refDoctor}
+                    onChange={(e) => setRefDoctor(e.target.value)}
+                    placeholder="e.g. Dr. Vikranth Chunduri"
+                    disabled={inputsLocked}
+                  />
+                </Field>
+                <Field label="Speciality">
+                  <Input
+                    value={speciality}
+                    onChange={(e) => setSpeciality(e.target.value)}
+                    placeholder="e.g. Gastroenterologist"
+                    disabled={inputsLocked}
+                  />
+                </Field>
+                <Field label="Date of Examination" required>
+                  <Input
+                    type="date"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    disabled={inputsLocked}
+                  />
+                </Field>
+                <Field label="Reporting Radiologist">
+                  <Select
+                    value={reportingRadiologist}
+                    onValueChange={setReportingRadiologist}
+                    disabled={inputsLocked}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {REPORTING_RADIOLOGISTS.map((d) => (
+                        <SelectItem key={d} value={d}>
+                          {d}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </div>
             </div>
-            <Textarea
-              value={radiologistNotes}
-              onChange={(e) => setRadiologistNotes(e.target.value)}
-              rows={5}
-              className="font-mono"
-              placeholder="e.g. Liver 14.5cm. GB pld. Pancreas H and b normal. Spleen 8.2cm. RK @ m s he. LK @ m s he. UB empty c review full bladder."
-              disabled={inputsLocked}
-            />
-            <p className="mt-1.5 text-[11px] text-[#8591A8]">
-              Shorthand: @ = normal, m s he = normal size and echo, pld =
-              partially distended, mld = minimally distended, c = with, H and b
-              = head and body, OLPH = no other lesions
-            </p>
-          </div>
-        </div>
 
-        {/* Actions (before a draft exists) */}
-        {!draftReport && (
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={loadDemo} disabled={busy}>
-              Load Demo Patient
-            </Button>
-            <Button onClick={runGenerate} disabled={busy}>
-              {phase === "uploading"
-                ? "Uploading photos…"
-                : phase === "generating"
-                  ? "Generating…"
-                  : "Generate Report with AI"}
-            </Button>
-          </div>
+            {/* Scan Type */}
+            <div className={CARD}>
+              <div className={SECTION_LABEL}>
+                Scan Type <span className="text-[#7F1D1D]">*</span>
+              </div>
+              <Select
+                value={scanType}
+                onValueChange={setScanType}
+                disabled={inputsLocked}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="-- Select scan type --" />
+                </SelectTrigger>
+                <SelectContent>
+                  {SCAN_GROUPS.map((g) => (
+                    <SelectGroup key={g.label}>
+                      <SelectLabel>{g.label}</SelectLabel>
+                      {g.values.map((v) => (
+                        <SelectItem key={v} value={v}>
+                          {scanTypeLabel(v)}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Raw Data Form */}
+            <div className={CARD}>
+              <div className={SECTION_LABEL}>Raw Data Form</div>
+
+              <div className="grid grid-cols-3 gap-2.5">
+                <UploadButton
+                  icon={<Camera className="h-6 w-6" />}
+                  title="Camera"
+                  hint="Take photo"
+                  capture
+                  disabled={inputsLocked}
+                  onFiles={addFiles}
+                />
+                <UploadButton
+                  icon={<ImagePlus className="h-6 w-6" />}
+                  title="Gallery"
+                  hint="From photos"
+                  disabled={inputsLocked}
+                  onFiles={addFiles}
+                />
+                <UploadButton
+                  icon={<FileText className="h-6 w-6" />}
+                  title="Files"
+                  hint="Browse"
+                  disabled={inputsLocked}
+                  onFiles={addFiles}
+                />
+              </div>
+
+              {previewUrls.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-3">
+                  {previewUrls.map((url, i) => (
+                    <div
+                      key={url}
+                      className="relative h-24 w-24 overflow-hidden rounded-md border border-input bg-muted"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={url}
+                        alt={`Notes photo ${i + 1}`}
+                        className="h-full w-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removePhoto(i)}
+                        disabled={inputsLocked}
+                        className="absolute right-1 top-1 rounded-full bg-background/80 p-0.5 text-foreground shadow hover:bg-background disabled:opacity-50"
+                        aria-label={`Remove photo ${i + 1}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-3">
+                <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wide text-[#8591A8]">
+                    Or dictate / type raw readings
+                  </div>
+                  <DictateButton
+                    label="Dictate Findings"
+                    onAppend={(t) =>
+                      setRadiologistNotes((prev) => (prev ? `${prev} ${t}` : t))
+                    }
+                  />
+                </div>
+                <Textarea
+                  value={radiologistNotes}
+                  onChange={(e) => setRadiologistNotes(e.target.value)}
+                  rows={5}
+                  className="font-mono"
+                  placeholder="e.g. Liver 14.5cm. GB pld. Pancreas H and b normal. Spleen 8.2cm. RK @ m s he. LK @ m s he. UB empty c review full bladder."
+                  disabled={inputsLocked}
+                />
+                <p className="mt-1.5 text-[11px] text-[#8591A8]">
+                  Shorthand: @ = normal, m s he = normal size and echo, pld =
+                  partially distended, mld = minimally distended, c = with, H
+                  and b = head and body, OLPH = no other lesions
+                </p>
+              </div>
+            </div>
+
+            {/* AI Learning bar */}
+            {learnTotal > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-border bg-secondary px-3.5 py-2.5 text-xs text-primary">
+                <span>
+                  {"\u{1F9E0}"} <b>AI Learning Active</b> —{" "}
+                  {learnStats.corrections} corrections + {learnStats.approvals}{" "}
+                  approvals learned
+                </span>
+                <span className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={openLearnDetail}>
+                    View Details
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={doClearLearning}>
+                    Clear Learning
+                  </Button>
+                </span>
+              </div>
+            )}
+
+            {/* Actions (before a draft exists) */}
+            {!draftReport && (
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={loadDemo} disabled={busy}>
+                  Load Demo Patient
+                </Button>
+                <Button onClick={runGenerate} disabled={busy}>
+                  {phase === "uploading"
+                    ? "Uploading photos…"
+                    : phase === "generating"
+                      ? "Generating…"
+                      : "Generate Report with AI"}
+                </Button>
+              </div>
+            )}
+          </>
         )}
 
-        {/* Generated Report */}
+        {/* Generated / loaded report editor (shared by both modes) */}
         {draftReport && (
           <div className={CARD}>
             <div className="mb-2.5 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-[#8591A8]">
-                  Generated Report
+                  {loadedCase ? "Report (correcting)" : "Generated Report"}
                 </span>
                 <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] font-bold text-primary-foreground">
                   AI · clinic format
                 </span>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRegenerate}
-                disabled={busy}
-              >
-                {phase === "generating" ? "Regenerating…" : "Regenerate"}
-              </Button>
+              {!loadedCase && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRegenerate}
+                  disabled={busy}
+                >
+                  {phase === "generating" ? "Regenerating…" : "Regenerate"}
+                </Button>
+              )}
             </div>
 
             <div className="overflow-hidden rounded-[10px] border border-border">
@@ -577,23 +814,106 @@ export default function CapturePage() {
             </div>
 
             <div className="mt-2.5 flex justify-end gap-2">
-              <Button variant="outline" onClick={handleDiscard} disabled={busy}>
-                Discard
-              </Button>
+              {!loadedCase && (
+                <Button variant="outline" onClick={handleDiscard} disabled={busy}>
+                  Discard
+                </Button>
+              )}
               <Button onClick={handleSubmit} disabled={busy}>
                 {phase === "submitting"
                   ? "Submitting…"
-                  : "Submit for Radiologist Review"}
+                  : loadedCase
+                    ? "Resubmit to Radiologist"
+                    : radiologistPersona
+                      ? "Submit (review yourself)"
+                      : "Submit for Radiologist Review"}
               </Button>
             </div>
           </div>
         )}
       </div>
+
+      {/* Learning details modal */}
+      <Modal open={learnEntries !== null} onClose={() => setLearnEntries(null)}>
+        <div className="mb-3 text-sm font-semibold">AI Learning Log</div>
+        {learnEntries && learnEntries.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No learning data yet.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {learnEntries?.map((e) => (
+              <div
+                key={e.id}
+                className={
+                  "rounded-[8px] p-2.5 text-[11px] " +
+                  (e.kind === "approval"
+                    ? "bg-[#D1FAE5] text-[#155E3A]"
+                    : "bg-secondary text-foreground")
+                }
+              >
+                <b>
+                  {e.kind === "approval" ? "Approved" : "Correction"} ·{" "}
+                  {scanTypeLabel(e.scanType)}
+                </b>
+                <div className="mt-0.5 line-clamp-2">
+                  {e.kind === "approval"
+                    ? (e.text ?? "").slice(0, 160)
+                    : e.comment}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="mt-4 flex justify-end border-t border-border pt-3">
+          <Button variant="outline" onClick={() => setLearnEntries(null)}>
+            Close
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 }
 
-/** Compact labelled form field used across the patient grid. */
+/** One of the three Camera / Gallery / Files upload tiles. */
+function UploadButton({
+  icon,
+  title,
+  hint,
+  capture,
+  disabled,
+  onFiles,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  hint: string;
+  capture?: boolean;
+  disabled?: boolean;
+  onFiles: (files: FileList | null) => void;
+}) {
+  return (
+    <label
+      className={
+        "flex cursor-pointer flex-col items-center gap-1 rounded-[10px] border border-border bg-card p-3 text-center transition-colors hover:border-ring hover:bg-secondary " +
+        (disabled ? "pointer-events-none opacity-50" : "")
+      }
+    >
+      <input
+        type="file"
+        accept="image/*"
+        {...(capture ? { capture: "environment" as const } : {})}
+        className="hidden"
+        disabled={disabled}
+        onChange={(e) => {
+          onFiles(e.target.files);
+          e.target.value = "";
+        }}
+      />
+      <span className="text-primary">{icon}</span>
+      <span className="text-xs font-semibold text-primary">{title}</span>
+      <span className="text-[10px] text-[#8591A8]">{hint}</span>
+    </label>
+  );
+}
+
 function Field({
   label,
   required,

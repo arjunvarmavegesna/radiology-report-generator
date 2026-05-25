@@ -2,9 +2,21 @@ import type { Timestamp } from "firebase/firestore";
 
 export type Role = "radiologist" | "typist" | "reviewer";
 
-export type CaseStatus = "pending_typing" | "pending_review" | "approved";
+export type CaseStatus =
+  | "pending_typing"
+  | "pending_review"
+  | "sent_back"
+  | "approved";
 
 export type Gender = "Male" | "Female";
+
+/** A correction note in a case's review thread. */
+export interface CaseComment {
+  text: string;
+  byRole: "typist" | "radiologist";
+  byUid: string;
+  at: Timestamp | null;
+}
 
 /** Patient header that appears on every report. */
 export interface PatientDetails {
@@ -53,6 +65,10 @@ export interface CaseDoc {
   dateOfExam: string; // dd/mm/yyyy
   refDoctor: string;
   scanType: string; // one of SCAN_TYPES[].value
+  /** Referring doctor's speciality (optional, display-only). */
+  speciality?: string;
+  /** Reporting radiologist's display name (optional). */
+  reportingRadiologist?: string;
 
   radiologistId: string;
   radiologistNotes: string; // the shorthand
@@ -61,6 +77,9 @@ export interface CaseDoc {
   notesImagePaths?: string[];
 
   status: CaseStatus;
+
+  /** Review thread: radiologist corrections + send-back notes. */
+  comments?: CaseComment[];
 
   draftReport: ReportJSON | null; // AI output
   editedReport: ReportJSON | null; // after typist edits
@@ -91,6 +110,8 @@ export interface NewCaseInput {
   dateOfExam: string; // dd/mm/yyyy
   refDoctor: string;
   scanType: string;
+  speciality?: string;
+  reportingRadiologist?: string;
   radiologistNotes: string;
   /** Optional photos of handwritten findings. Either notes text or at least
    *  one image must be present. */

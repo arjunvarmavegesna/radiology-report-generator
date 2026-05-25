@@ -63,3 +63,23 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Browser-print: when the Print Queue preview modal triggers window.print(),
+   print only the `.print-area` (the formatted report), hiding the app chrome
+   and the modal overlay. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 16px;
+  }
+}

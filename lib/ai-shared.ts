@@ -177,10 +177,16 @@ export function buildStaticBlock(c: CaseDoc): string {
   ].join("\n");
 }
 
-/** Per-request volatile content: patient header + radiologist's shorthand.
- *  When `hasImages` is true, the block tells the model that the photos above
- *  contain handwritten findings to read. */
-export function buildVolatileBlock(c: CaseDoc, hasImages = false): string {
+/** Per-request volatile content: patient header + radiologist's shorthand,
+ *  plus an optional AI-learning block. This is the NON-cached suffix — learning
+ *  text goes here (not in the cached static block) so per-case learning never
+ *  poisons the prompt cache key. When `hasImages` is true, the block tells the
+ *  model that the photos above contain handwritten findings to read. */
+export function buildVolatileBlock(
+  c: CaseDoc,
+  hasImages = false,
+  learningContext = "",
+): string {
   const notes = c.radiologistNotes?.trim()
     ? c.radiologistNotes
     : hasImages
@@ -206,7 +212,47 @@ export function buildVolatileBlock(c: CaseDoc, hasImages = false): string {
     notes,
     ">>>",
     "",
+    learningContext.trim() ? learningContext.trim() : null,
+    learningContext.trim() ? "" : null,
     "Generate the formal report as JSON per the system prompt rules.",
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
+/** Volatile block for an AI Revise pass: the current report + the radiologist's
+ *  correction note. The model re-emits the FULL revised report as JSON, keeping
+ *  the same format and applying only the requested change. */
+export function buildReviseBlock(
+  c: CaseDoc,
+  currentReportText: string,
+  comment: string,
+  learningContext = "",
+): string {
+  return [
+    "PATIENT DETAILS:",
+    `Name: ${c.patientName}`,
+    `Age: ${c.age}`,
+    `Gender: ${c.gender}`,
+    `MR Number: ${c.mrNumber}`,
+    `Date of Examination: ${c.dateOfExam}`,
+    `Referring Doctor: ${c.refDoctor}`,
+    "",
+    `SCAN TYPE: ${scanTypeLabel(c.scanType)}`,
+    "",
+    "CURRENT REPORT (the radiologist is reviewing this draft):",
+    "<<<",
+    currentReportText,
+    ">>>",
+    "",
+    "RADIOLOGIST'S CORRECTION (apply exactly this change; leave everything else unchanged):",
+    "<<<",
+    comment,
+    ">>>",
+    "",
+    learningContext.trim() ? learningContext.trim() : null,
+    learningContext.trim() ? "" : null,
+    "Re-emit the COMPLETE revised report as JSON per the system prompt rules — same scanTitle/body[] structure, same phrasing conventions, only the requested correction applied.",
   ]
     .filter((line): line is string => line !== null)
     .join("\n");
