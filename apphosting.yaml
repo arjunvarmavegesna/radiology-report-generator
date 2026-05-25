@@ -27,8 +27,11 @@ env:
   - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
     value: radiology-report-generat-b026f
     availability: [BUILD, RUNTIME]
+  # Photo uploads / docx exports. Moved off the project's default
+  # africa-south1 (South Africa) bucket to this asia-south1 (Mumbai) bucket so
+  # uploads from India are fast. Existing files were migrated 1:1.
   - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
-    value: radiology-report-generat-b026f.firebasestorage.app
+    value: radiology-report-generat-b026f-mumbai
     availability: [BUILD, RUNTIME]
   - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
     value: "971174520916"
