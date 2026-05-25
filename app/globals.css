@@ -64,6 +64,17 @@
   }
 }
 
+/* On phones, keep form-control text at >=16px so iOS Safari doesn't auto-zoom
+   the viewport the moment a field gains focus. !important overrides the
+   text-xs/text-sm utilities the components set. */
+@media (max-width: 640px) {
+  input:not([type="radio"]):not([type="checkbox"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 /* Browser-print: when the Print Queue preview modal triggers window.print(),
    print only the `.print-area` (the formatted report), hiding the app chrome
    and the modal overlay. */

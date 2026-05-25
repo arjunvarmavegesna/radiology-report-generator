@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Timestamp } from "firebase/firestore";
 import { toast } from "sonner";
-import { FileText } from "lucide-react";
+import { FileText, ChevronLeft } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   getReviewQueue,
@@ -266,8 +266,15 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
 
   return (
     <div className="flex h-full">
-      {/* Queue */}
-      <aside className="w-[280px] flex-shrink-0 overflow-y-auto border-r border-border bg-muted p-3">
+      {/* Queue — full width on mobile, fixed sidebar from md up. On a phone it
+          hides once a case is open (master-detail), so the report gets the
+          whole screen. */}
+      <aside
+        className={cn(
+          "overflow-y-auto bg-muted p-3 md:w-[280px] md:flex-shrink-0 md:border-r md:border-border",
+          selectedId ? "hidden w-full md:block" : "block w-full",
+        )}
+      >
         <div className="mb-2.5 flex items-center justify-between">
           <span className="text-[13px] font-semibold">Pending Review</span>
           <span className="rounded-full border border-[#FCD34D] bg-[#FEF3C7] px-2 py-0.5 text-[11px] font-semibold text-[#7C3E0B]">
@@ -313,7 +320,12 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
       </aside>
 
       {/* Detail */}
-      <section className="flex-1 overflow-y-auto p-4">
+      <section
+        className={cn(
+          "flex-1 overflow-y-auto p-4",
+          selectedId ? "block" : "hidden md:block",
+        )}
+      >
         {!selectedId ? (
           <EmptyDetail
             title="Select a report to review"
@@ -325,6 +337,12 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
           <EmptyDetail title="Case not found" subtitle="It may have moved on." />
         ) : (
           <div className="mx-auto max-w-3xl space-y-4">
+            <button
+              onClick={() => setSelectedId(null)}
+              className="-ml-1 mb-1 flex items-center gap-1 text-xs font-medium text-primary md:hidden"
+            >
+              <ChevronLeft className="h-4 w-4" /> Back to queue
+            </button>
             <div>
               <div className="mb-1 text-[15px] font-semibold">
                 {c.patientName}

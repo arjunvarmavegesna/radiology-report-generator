@@ -39,7 +39,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         className={cn(
-          "max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-[14px] bg-card p-5 shadow-xl",
+          "max-h-[90dvh] w-full max-w-2xl overflow-y-auto rounded-[14px] bg-card p-5 shadow-xl",
           className,
         )}
         onClick={(e) => e.stopPropagation()}

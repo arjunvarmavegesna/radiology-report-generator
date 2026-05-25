@@ -33,11 +33,11 @@ import {
   type LearningStats,
 } from "@/lib/learning";
 import { loadPersona, type Persona } from "@/lib/persona";
+import { compressImage } from "@/lib/image";
 import type { CaseDoc, Gender, ReportJSON } from "@/lib/types";
 
 const MAX_PHOTOS = 3;
 const MAX_BYTES = 5 * 1024 * 1024;
-const ACCEPTED_MIME = /^image\/(jpeg|jpg|png|webp|gif)$/i;
 
 const REPORTING_RADIOLOGISTS = [
   "Dr. K. Valli Manasa, MD",
@@ -229,25 +229,37 @@ export default function CapturePage() {
     return () => urls.forEach((u) => URL.revokeObjectURL(u));
   }, [photos]);
 
-  function addFiles(incoming: FileList | null) {
+  async function addFiles(incoming: FileList | null) {
     if (!incoming || incoming.length === 0) return;
-    const next = [...photos];
-    for (const f of Array.from(incoming)) {
-      if (!ACCEPTED_MIME.test(f.type)) {
-        toast.error(`${f.name}: not a supported image type.`);
-        continue;
-      }
-      if (f.size > MAX_BYTES) {
-        toast.error(`${f.name}: too large (max 5 MB).`);
-        continue;
-      }
-      if (next.length >= MAX_PHOTOS) {
-        toast.error(`Up to ${MAX_PHOTOS} photos per case.`);
-        break;
-      }
-      next.push(f);
+
+    const slotsLeft = MAX_PHOTOS - photos.length;
+    if (slotsLeft <= 0) {
+      toast.error(`Up to ${MAX_PHOTOS} photos per case.`);
+      return;
     }
-    setPhotos(next);
+    const picked = Array.from(incoming).slice(0, slotsLeft);
+    if (picked.length < incoming.length) {
+      toast.error(`Up to ${MAX_PHOTOS} photos per case.`);
+    }
+
+    const added: File[] = [];
+    for (const f of picked) {
+      if (!f.type.startsWith("image/")) {
+        toast.error(`${f.name}: not an image file.`);
+        continue;
+      }
+      // Downscale phone photos so large captures (5–12 MB is normal) upload
+      // fine; falls back to the original File if the browser can't re-encode.
+      const file = await compressImage(f);
+      if (file.size > MAX_BYTES) {
+        toast.error(`${f.name}: still over 5 MB after resizing — try again.`);
+        continue;
+      }
+      added.push(file);
+    }
+    if (added.length) {
+      setPhotos((prev) => [...prev, ...added].slice(0, MAX_PHOTOS));
+    }
   }
 
   function removePhoto(idx: number) {
@@ -753,11 +765,20 @@ export default function CapturePage() {
 
             {/* Actions (before a draft exists) */}
             {!draftReport && (
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={loadDemo} disabled={busy}>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Button
+                  variant="outline"
+                  onClick={loadDemo}
+                  disabled={busy}
+                  className="w-full sm:w-auto"
+                >
                   Load Demo Patient
                 </Button>
-                <Button onClick={runGenerate} disabled={busy}>
+                <Button
+                  onClick={runGenerate}
+                  disabled={busy}
+                  className="w-full sm:w-auto"
+                >
                   {phase === "uploading"
                     ? "Uploading photos…"
                     : phase === "generating"
@@ -813,13 +834,22 @@ export default function CapturePage() {
               />
             </div>
 
-            <div className="mt-2.5 flex justify-end gap-2">
+            <div className="mt-2.5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               {!loadedCase && (
-                <Button variant="outline" onClick={handleDiscard} disabled={busy}>
+                <Button
+                  variant="outline"
+                  onClick={handleDiscard}
+                  disabled={busy}
+                  className="w-full sm:w-auto"
+                >
                   Discard
                 </Button>
               )}
-              <Button onClick={handleSubmit} disabled={busy}>
+              <Button
+                onClick={handleSubmit}
+                disabled={busy}
+                className="w-full sm:w-auto"
+              >
                 {phase === "submitting"
                   ? "Submitting…"
                   : loadedCase

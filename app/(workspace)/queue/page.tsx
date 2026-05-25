@@ -174,7 +174,7 @@ export default function PrintQueuePage() {
               return (
                 <div
                   key={c.id}
-                  className="flex items-center gap-3 rounded-[10px] border border-border bg-card p-3"
+                  className="flex flex-wrap items-center gap-3 rounded-[10px] border border-border bg-card p-3"
                 >
                   <span
                     className={cn(
@@ -199,7 +199,7 @@ export default function PrintQueuePage() {
                       {formatTimestamp(c.reviewerApprovedAt)}
                     </div>
                   </div>
-                  <div className="flex flex-shrink-0 items-center gap-2">
+                  <div className="ml-auto flex flex-shrink-0 items-center gap-2">
                     <span
                       className={cn(
                         "inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
@@ -306,7 +306,7 @@ export default function PrintQueuePage() {
               </div>
             </div>
 
-            <div className="mt-4 flex justify-end gap-2 border-t border-border pt-3">
+            <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-border pt-3">
               <Button variant="outline" onClick={() => setPreview(null)}>
                 Close
               </Button>

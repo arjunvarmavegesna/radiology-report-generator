@@ -8,7 +8,7 @@ export default function WorkspaceLayout({
 }) {
   return (
     <AuthGuard>
-      <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <div className="flex h-[100dvh] flex-col overflow-hidden bg-background">
         <AppHeader />
         {/* Each page owns its own scroll: Capture/Queue scroll a centered
             column; Review fills the height with two independent panes. */}
