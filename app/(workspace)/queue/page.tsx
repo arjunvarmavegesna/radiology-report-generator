@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { FileText, RotateCw, Printer, Check } from "lucide-react";
+import { FileText, RotateCw, Printer, Check, Download } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { getApprovedCases, markPrinted } from "@/lib/cases";
 import { scanTypeLabel } from "@/lib/scan-types";
 import { formatTimestamp, CHIP } from "@/lib/format";
-import { openInWord } from "@/lib/office-url";
+import { openInWord, downloadDocx } from "@/lib/office-url";
 import { reportToText } from "@/lib/report-text";
 import type { CaseDoc } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -24,9 +24,9 @@ export default function PrintQueuePage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>("all");
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [busyAction, setBusyAction] = useState<"open" | "regen" | "print" | null>(
-    null,
-  );
+  const [busyAction, setBusyAction] = useState<
+    "open" | "regen" | "print" | "download" | null
+  >(null);
   const [preview, setPreview] = useState<CaseDoc | null>(null);
 
   const load = useCallback(async () => {
@@ -74,6 +74,40 @@ export default function PrintQueuePage() {
       toast.success("Opening in Word…");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to open in Word.");
+    } finally {
+      setBusyId(null);
+      setBusyAction(null);
+    }
+  }
+
+  /** Re-export to mint a fresh signed URL, then trigger a browser download
+   *  (the URL is already issued with Content-Disposition: attachment). */
+  async function handleDownload(c: CaseDoc) {
+    if (!user || !c.id) return;
+    if (!c.finalReport) {
+      toast.error("This case has no final report yet.");
+      return;
+    }
+    setBusyId(c.id);
+    setBusyAction("download");
+    try {
+      const token = await user.getIdToken();
+      const resp = await fetch(`/api/export/${c.id}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ report: c.finalReport }),
+      });
+      const data = (await resp.json()) as { downloadUrl?: string; error?: string };
+      if (!resp.ok || !data.downloadUrl) {
+        throw new Error(data.error || `Download failed (${resp.status})`);
+      }
+      downloadDocx(data.downloadUrl);
+      toast.success("Downloading Word file…");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to download.");
     } finally {
       setBusyId(null);
       setBusyAction(null);
@@ -234,7 +268,13 @@ export default function PrintQueuePage() {
         {preview && (
           <>
             <div className="mb-3.5 text-sm font-semibold">Print Preview</div>
-            <div className="print-area font-mono text-xs">
+            <div
+              className="print-area"
+              style={{
+                fontFamily: '"Times New Roman", Times, serif',
+                fontSize: "12pt",
+              }}
+            >
               <div className="mb-3 border-b-2 border-primary pb-2.5">
                 <h2 className="font-sans text-sm font-bold text-primary">
                   RADIOLOGY REPORTS
@@ -329,6 +369,16 @@ export default function PrintQueuePage() {
                     : "Mark as printed"}
                 </Button>
               )}
+              <Button
+                variant="outline"
+                onClick={() => handleDownload(preview)}
+                disabled={busyId === preview.id}
+              >
+                <Download className="mr-1.5 h-4 w-4" />
+                {busyId === preview.id && busyAction === "download"
+                  ? "Preparing…"
+                  : "Download Word"}
+              </Button>
               <Button
                 onClick={() => handleOpenInWord(preview)}
                 disabled={busyId === preview.id}

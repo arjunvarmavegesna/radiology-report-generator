@@ -30,3 +30,19 @@ export function openInWord(docxUrl: string): void {
   a.click();
   a.remove();
 }
+
+/**
+ * Trigger a browser download of the docx at the given URL. The signed URL is
+ * already issued with `responseDisposition: attachment; filename=...`, so the
+ * browser will save the file with the correct name.
+ */
+export function downloadDocx(docxUrl: string): void {
+  const a = document.createElement("a");
+  a.href = docxUrl;
+  a.rel = "noopener noreferrer";
+  // download attribute is a hint; the response's Content-Disposition wins.
+  a.setAttribute("download", "");
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}

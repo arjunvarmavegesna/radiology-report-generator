@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Timestamp } from "firebase/firestore";
 import { toast } from "sonner";
-import { FileText, ChevronLeft } from "lucide-react";
+import { FileText, ChevronLeft, Download } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import {
   getReviewQueue,
@@ -13,7 +13,7 @@ import {
 } from "@/lib/cases";
 import { scanTypeLabel, isObstetricScan } from "@/lib/scan-types";
 import { formatTimestamp, STATUS_META } from "@/lib/format";
-import { openInWord } from "@/lib/office-url";
+import { openInWord, downloadDocx } from "@/lib/office-url";
 import { reportToText, buildReport, emptyReport } from "@/lib/report-text";
 import type { CaseDoc, ReportJSON } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -44,7 +44,7 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
   const [complianceText, setComplianceText] = useState<string | null>(null);
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState<
-    null | "save" | "approve" | "generate" | "revise" | "sendback"
+    null | "save" | "approve" | "generate" | "revise" | "sendback" | "download"
   >(null);
 
   const loadQueue = useCallback(async () => {
@@ -220,6 +220,50 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
     }
   }
 
+  async function handleDownload() {
+    if (!user) return;
+    const report = makeReport();
+    if (!report || !c?.id) return;
+    if (!report.scanTitle) {
+      toast.error("Scan title is required.");
+      return;
+    }
+    if (report.body.length === 0) {
+      toast.error("Report body is empty.");
+      return;
+    }
+    setBusy("download");
+    try {
+      const token = await user.getIdToken();
+      const resp = await fetch(`/api/export/${c.id}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ report }),
+      });
+      const data = (await resp.json()) as {
+        downloadUrl?: string;
+        error?: string;
+      };
+      if (!resp.ok || !data.downloadUrl) {
+        throw new Error(data.error || `Download failed (${resp.status})`);
+      }
+      downloadDocx(data.downloadUrl);
+      toast.success("Approved — downloading Word file.");
+      setSelectedId(null);
+      setC(null);
+      await loadQueue();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to download.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleApprove() {
     if (!user) return;
     const report = makeReport();
@@ -390,7 +434,11 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
                 value={bodyText}
                 onChange={(e) => setBodyText(e.target.value)}
                 rows={22}
-                className="font-mono text-xs leading-relaxed"
+                className="font-serif leading-relaxed"
+                style={{
+                  fontFamily: '"Times New Roman", Times, serif',
+                  fontSize: "12pt",
+                }}
                 placeholder="Each line becomes one paragraph in the Word document."
               />
               <p className="text-xs text-muted-foreground">
@@ -409,7 +457,11 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
                   value={complianceText ?? ""}
                   onChange={(e) => setComplianceText(e.target.value)}
                   rows={6}
-                  className="font-mono text-xs leading-relaxed"
+                  className="leading-relaxed"
+                  style={{
+                    fontFamily: '"Times New Roman", Times, serif',
+                    fontSize: "12pt",
+                  }}
                 />
               </div>
             )}
@@ -464,6 +516,14 @@ export function ReviewWorkspace({ initialCaseId }: { initialCaseId?: string }) {
                 disabled={busy !== null}
               >
                 {busy === "save" ? "Saving…" : "Save edits"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleDownload}
+                disabled={busy !== null}
+              >
+                <Download className="mr-1.5 h-4 w-4" />
+                {busy === "download" ? "Downloading…" : "Download Word"}
               </Button>
               <Button
                 variant="success"

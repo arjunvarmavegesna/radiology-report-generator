@@ -26,6 +26,65 @@ function sanitize(s: string): string {
 }
 
 /**
+ * Force every run in the rendered docx to Times New Roman 12pt, regardless of
+ * what fonts the upstream template specified. Operates on the live PizZip
+ * instance from docxtemplater. Half-points: 12pt = 24.
+ */
+function forceTimesNewRoman12(zip: PizZip): void {
+  const FONT = "Times New Roman";
+  const SIZE = "24";
+  const rFontsTag =
+    `<w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" ` +
+    `w:cs="${FONT}" w:eastAsia="${FONT}"/>`;
+  const szTag = `<w:sz w:val="${SIZE}"/>`;
+  const szCsTag = `<w:szCs w:val="${SIZE}"/>`;
+
+  // Files that can carry visible text runs.
+  const candidates = [
+    "word/document.xml",
+    "word/styles.xml",
+    "word/header1.xml",
+    "word/header2.xml",
+    "word/header3.xml",
+    "word/footer1.xml",
+    "word/footer2.xml",
+    "word/footer3.xml",
+    "word/footnotes.xml",
+    "word/endnotes.xml",
+  ];
+
+  for (const fname of candidates) {
+    const file = zip.file(fname);
+    if (!file) continue;
+    let xml = file.asText();
+    // Replace any rFonts element (self-closing or not) with our forced fonts.
+    xml = xml.replace(/<w:rFonts\b[^>]*\/>/g, rFontsTag);
+    xml = xml.replace(/<w:rFonts\b[^>]*>[\s\S]*?<\/w:rFonts>/g, rFontsTag);
+    // Replace any sz / szCs with 24 (12pt).
+    xml = xml.replace(/<w:sz\b[^>]*\/>/g, szTag);
+    xml = xml.replace(/<w:szCs\b[^>]*\/>/g, szCsTag);
+    zip.file(fname, xml);
+  }
+
+  // Make the document-wide default the same, so paragraphs that have no
+  // explicit run properties also pick up Times New Roman 12.
+  const styles = zip.file("word/styles.xml");
+  if (styles) {
+    let xml = styles.asText();
+    const defaultRPr =
+      `<w:rPrDefault><w:rPr>${rFontsTag}${szTag}${szCsTag}</w:rPr></w:rPrDefault>`;
+    if (/<w:rPrDefault\b[\s\S]*?<\/w:rPrDefault>/.test(xml)) {
+      xml = xml.replace(/<w:rPrDefault\b[\s\S]*?<\/w:rPrDefault>/, defaultRPr);
+    } else if (/<w:rPrDefault\b[^>]*\/>/.test(xml)) {
+      xml = xml.replace(/<w:rPrDefault\b[^>]*\/>/, defaultRPr);
+    } else if (/<w:docDefaults>/.test(xml)) {
+      xml = xml.replace(/<w:docDefaults>/, `<w:docDefaults>${defaultRPr}`);
+    }
+    zip.file("word/styles.xml", xml);
+  }
+}
+
+/**
  * POST /api/export/[caseId]
  *
  * Body: { report: ReportJSON }
@@ -129,7 +188,9 @@ export async function POST(
       body: flattenReportBody(report),
       complianceText: report.complianceText ?? null,
     });
-    outBuf = doc.getZip().generate({ type: "nodebuffer" }) as Buffer;
+    const renderedZip = doc.getZip() as PizZip;
+    forceTimesNewRoman12(renderedZip);
+    outBuf = renderedZip.generate({ type: "nodebuffer" }) as Buffer;
   } catch (err) {
     const msg = err instanceof Error ? err.message : "render failed";
     return NextResponse.json(
